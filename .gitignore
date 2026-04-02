@@ -1,0 +1,21 @@
+# Node
+node_modules/
+.next/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Env
+.env
+
+# IDE
+.DS_Store
+.idea/
+.vscode/*.log
+
+# Runtime data
+tmp/
+uploads/

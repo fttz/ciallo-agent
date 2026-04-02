@@ -1,0 +1,10 @@
+{
+  "name": "ciallo-agent",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:web": "pnpm --filter @ciallo/web dev",
+    "build:web": "pnpm --filter @ciallo/web build",
+    "start:web": "pnpm --filter @ciallo/web start"
+  }
+}
