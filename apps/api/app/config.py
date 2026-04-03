@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     model_default: str = "qwen3.5-plus"
     model_vision_default: str = "qwen3.5-plus"
     model_configs: str = "qwen3.5-plus:Qwen3.5 Plus:text,vision"
+    session_store_path: str = "./data/sessions.json"
 
     model_config = SettingsConfigDict(env_file=(str(ROOT_ENV_PATH), ".env"), extra="ignore")
 

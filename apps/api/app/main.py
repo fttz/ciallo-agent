@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-from uuid import uuid4
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, File, UploadFile
@@ -10,11 +8,12 @@ from .config import settings
 from .file_parser import save_upload_file
 from .model_gateway import list_models, stream_chat_completion
 from .schemas import ChatRequest, SessionCreateRequest, SessionItem, UserSettings
+from .session_store import SessionStore
 
 app = FastAPI(title=settings.app_name)
 
-SESSIONS: dict[str, dict] = {}
 USER_SETTINGS = UserSettings()
+SESSION_STORE = SessionStore(settings.session_store_path)
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,38 +36,17 @@ def models():
 
 @app.get("/api/sessions")
 def list_sessions() -> list[SessionItem]:
-    items = []
-    for data in SESSIONS.values():
-        items.append(
-            SessionItem(
-                id=data["id"],
-                title=data["title"],
-                updated_at=data["updated_at"],
-            )
-        )
-    return sorted(items, key=lambda i: i.updated_at, reverse=True)
+    return SESSION_STORE.list_sessions()
 
 
 @app.post("/api/sessions")
 def create_session(payload: SessionCreateRequest) -> SessionItem:
-    session_id = str(uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-    title = payload.title or "新会话"
-    SESSIONS[session_id] = {
-        "id": session_id,
-        "title": title,
-        "updated_at": now,
-        "messages": [],
-    }
-    return SessionItem(id=session_id, title=title, updated_at=now)
+    return SESSION_STORE.create_session(payload.title)
 
 
 @app.get("/api/sessions/{session_id}/messages")
 def get_session_messages(session_id: str):
-    item = SESSIONS.get(session_id)
-    if not item:
-        return []
-    return item["messages"]
+    return SESSION_STORE.get_messages(session_id)
 
 
 @app.get("/api/settings")
@@ -85,9 +63,26 @@ def update_settings(payload: UserSettings) -> UserSettings:
 
 @app.post("/api/chat/stream")
 async def chat_stream(payload: ChatRequest) -> StreamingResponse:
+    stored_history = SESSION_STORE.get_messages(payload.session_id) if payload.session_id else []
+    merged_messages = [*stored_history, *payload.messages]
+    request_payload = ChatRequest(model=payload.model, messages=merged_messages, images=payload.images)
+
+    if payload.session_id and payload.messages:
+        last_user = payload.messages[-1]
+        if last_user.role == "user":
+            SESSION_STORE.append_message(payload.session_id, "user", last_user.content, last_user.images)
+
     async def event_stream() -> AsyncGenerator[str, None]:
-        async for token in stream_chat_completion(payload):
+        assistant_parts: list[str] = []
+        async for token in stream_chat_completion(request_payload):
+            assistant_parts.append(token)
             yield f"data: {token}\n\n"
+
+        if payload.session_id:
+            assistant_text = "".join(assistant_parts).strip()
+            if assistant_text:
+                SESSION_STORE.append_message(payload.session_id, "assistant", assistant_text)
+
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

@@ -19,3 +19,4 @@ __pycache__/
 # Runtime data
 tmp/
 uploads/
+apps/api/data/

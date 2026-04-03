@@ -82,18 +82,21 @@ def resolve_model(requested_model: str, has_images: bool = False) -> str:
 
 def _build_messages(payload: ChatRequest) -> list[dict]:
     messages: list[dict] = []
-    has_images = len(payload.images) > 0
 
     for idx, item in enumerate(payload.messages):
+        item_images = list(item.images)
         is_last_user = idx == len(payload.messages) - 1 and item.role == "user"
-        if has_images and is_last_user:
+        if is_last_user and payload.images and not item_images:
+            item_images = [{"name": f"image-{i + 1}", "data_url": image} for i, image in enumerate(payload.images)]
+
+        if item_images:
             multimodal_parts = [{"type": "text", "text": item.content}]
-            for image in payload.images:
+            for image in item_images:
                 multimodal_parts.append(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": image,
+                            "url": image.data_url if hasattr(image, "data_url") else image["data_url"],
                         },
                     }
                 )
@@ -104,7 +107,7 @@ def _build_messages(payload: ChatRequest) -> list[dict]:
 
 
 async def stream_chat_completion(payload: ChatRequest) -> AsyncGenerator[str, None]:
-    has_images = len(payload.images) > 0
+    has_images = len(payload.images) > 0 or any(message.images for message in payload.messages)
     selected_model = resolve_model(payload.model, has_images=has_images)
 
     if not settings.model_api_key.strip():
