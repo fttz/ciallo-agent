@@ -318,8 +318,11 @@ select {
   border: 1px solid color-mix(in srgb, var(--line) 88%, #ffffff 12%);
   border-radius: 18px;
   line-height: 1.75;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+.plain-message {
+  white-space: pre-wrap;
 }
 
 .message-image-grid {
@@ -395,6 +398,91 @@ select {
 .message-assistant {
   justify-self: start;
   background: rgba(255, 255, 255, 0.95);
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body pre,
+.markdown-body table,
+.markdown-body hr {
+  margin: 0 0 12px;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 22px;
+}
+
+.markdown-body li + li {
+  margin-top: 4px;
+}
+
+.markdown-body code {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.95em;
+  padding: 0.12em 0.4em;
+  border-radius: 8px;
+  background: #f3f5ff;
+  color: #6a2d72;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--line) 88%, #ffffff 12%);
+  border-radius: 12px;
+  background: #1f2238;
+  color: #eef2ff;
+}
+
+.markdown-body pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.markdown-body blockquote {
+  padding: 6px 0 6px 14px;
+  border-left: 4px solid #ffb2d2;
+  color: #5e6093;
+  background: rgba(255, 242, 248, 0.6);
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border-radius: 12px;
+  border-style: hidden;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--line) 88%, #ffffff 12%);
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 88%, #ffffff 12%);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-body th {
+  background: #f6f7ff;
+}
+
+.markdown-body a {
+  color: #c34382;
+  text-decoration: underline;
 }
 
 .composer {

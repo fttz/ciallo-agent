@@ -1,6 +1,8 @@
 "use client";
 
 import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type ModelInfo = {
   id: string;
@@ -55,6 +57,25 @@ const defaultModels: ModelInfo[] = [
   { id: "qwen-turbo-latest", name: "Qwen Turbo Latest", capabilities: ["text"] },
   { id: "qwen-vl-max-latest", name: "Qwen VL Max Latest", capabilities: ["text", "vision"] }
 ];
+
+function renderMessageContent(message: ChatMessage) {
+  if (message.role === "assistant") {
+    return (
+      <div className="markdown-body">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+          }}
+        >
+          {message.content}
+        </ReactMarkdown>
+      </div>
+    );
+  }
+
+  return <div className="plain-message">{message.content}</div>;
+}
 
 export default function Page() {
   const [models, setModels] = useState<ModelInfo[]>(defaultModels);
@@ -435,14 +456,36 @@ export default function Page() {
         const { done, value } = await reader.read();
         buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
 
-        const lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() ?? "";
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = events.pop() ?? "";
 
-        for (const rawLine of lines) {
-          const line = rawLine.trimEnd();
-          if (!line.startsWith("data:")) continue;
-          const piece = line.slice(5).trimStart();
-          if (!piece || piece === "[DONE]") continue;
+        for (const eventChunk of events) {
+          const lines = eventChunk.split(/\r?\n/);
+          const payloadLines: string[] = [];
+
+          for (const rawLine of lines) {
+            const line = rawLine.trimEnd();
+            if (!line.startsWith("data:")) continue;
+            payloadLines.push(line.slice(5).trimStart());
+          }
+
+          if (payloadLines.length === 0) continue;
+
+          const payloadText = payloadLines.join("\n");
+          if (!payloadText || payloadText === "[DONE]") continue;
+
+          let piece = payloadText;
+          try {
+            const parsed = JSON.parse(payloadText) as { token?: string };
+            if (typeof parsed.token === "string") {
+              piece = parsed.token;
+            }
+          } catch {
+            // Backward-compatible fallback for plain `data: token` payloads.
+          }
+
+          if (!piece) continue;
+
           setMessages((current) => {
             const updated = [...current];
             const last = updated.at(-1);
@@ -655,7 +698,7 @@ export default function Page() {
                       ))}
                     </div>
                   ) : null}
-                  {msg.content}
+                  {renderMessageContent(msg)}
                 </article>
               ))
             )}

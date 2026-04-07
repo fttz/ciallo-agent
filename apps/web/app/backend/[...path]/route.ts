@@ -1,5 +1,8 @@
 import { NextRequest } from "next/server";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 const API_PROXY_BASE = process.env.API_PROXY_BASE ?? "http://127.0.0.1:8000";
 
 function buildTargetUrl(path: string[], search: string) {

@@ -1,3 +1,4 @@
+import json
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -98,7 +99,8 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
         assistant_parts: list[str] = []
         async for token in stream_chat_completion(request_payload):
             assistant_parts.append(token)
-            yield f"data: {token}\n\n"
+            # Use JSON payload to keep SSE framing valid even when token contains newlines.
+            yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
 
         if payload.session_id:
             assistant_text = "".join(assistant_parts).strip()
@@ -107,7 +109,15 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
 
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/files/upload")
