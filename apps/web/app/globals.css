@@ -60,7 +60,7 @@ select {
 }
 
 .history-header {
-  padding: 16px;
+  padding: 10px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 84%, #ffffff 16%);
   background:
     linear-gradient(140deg, rgba(255, 223, 241, 0.72), rgba(225, 236, 255, 0.7));
@@ -70,14 +70,23 @@ select {
   gap: 10px;
 }
 
-.history-title {
-  font-size: 16px;
-  font-weight: 800;
+.history-avatar-wrap {
+  flex: 1;
+  min-width: 0;
+  max-width: 188px;
+  height: 84px;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, #ffffff 18%);
+  background: #fdfbff;
 }
 
-.history-subtitle {
-  font-size: 12px;
-  color: var(--subtext);
+.history-avatar {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
 }
 
 .session-list {
@@ -499,6 +508,35 @@ select {
   gap: 10px;
 }
 
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.add-button {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: #4b4f80;
+  font-size: 22px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.add-button:hover {
+  background: #f3f5ff;
+}
+
+.composer-tools-hint {
+  font-size: 12px;
+  color: var(--subtext);
+}
+
 .composer-attachment-strip {
   display: flex;
   gap: 10px;
@@ -604,6 +642,11 @@ select {
     max-height: 220px;
     border-right: none;
     border-bottom: 1px solid var(--line);
+  }
+
+  .history-avatar-wrap {
+    max-width: 160px;
+    height: 68px;
   }
 
   .chat-card {

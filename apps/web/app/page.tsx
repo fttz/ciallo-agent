@@ -92,8 +92,7 @@ export default function Page() {
   const [booting, setBooting] = useState(true);
   const initializedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const docInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const composerFormRef = useRef<HTMLFormElement | null>(null);
 
   const canSend = useMemo(
@@ -518,9 +517,12 @@ export default function Page() {
       <div className="workspace-grid">
         <aside className="history-panel">
           <header className="history-header">
-            <div>
-              <div className="history-title">会话历史</div>
-              <div className="history-subtitle">可持续上下文对话</div>
+            <div className="history-avatar-wrap" aria-label="Ciallo 形象位">
+              <img
+                src="/ciallo.png"
+                alt="Ciallo 卡通形象"
+                className="history-avatar"
+              />
             </div>
             <button
               type="button"
@@ -580,14 +582,7 @@ export default function Page() {
           <header className="chat-header">
             <div>
               <div className="brand-title">Ciallo～(∠・ω&lt; )⌒☆</div>
-              <div className="brand-subtitle">Galgame 风格智能体</div>
             </div>
-            <button
-              onClick={loadModels}
-              className="ghost-button"
-            >
-              刷新模型
-            </button>
           </header>
 
           <section className="toolbar">
@@ -606,56 +601,6 @@ export default function Page() {
                 </option>
               ))}
             </select>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/*"
-              hidden
-              onChange={async (e) => {
-                const input = e.currentTarget;
-                const files = input.files;
-                if (files) {
-                  await appendImages(files);
-                }
-                input.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              上传图片
-            </button>
-            <input
-              ref={docInputRef}
-              type="file"
-              multiple
-              accept=".txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.html,.htm,.url,.webloc,.web"
-              hidden
-              onChange={async (e) => {
-                const input = e.currentTarget;
-                const files = input.files;
-                try {
-                  if (files) {
-                    await appendDocuments(files);
-                    setModelHint("");
-                  }
-                } catch {
-                  setModelHint("文档解析失败，请检查文件格式或稍后重试。");
-                } finally {
-                  input.value = "";
-                }
-              }}
-            />
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={() => docInputRef.current?.click()}
-            >
-              上传文档
-            </button>
           </section>
 
           {modelHint ? <section className="hint-banner">{modelHint}</section> : null}
@@ -665,11 +610,9 @@ export default function Page() {
               <div className="empty-state">正在加载会话...</div>
             ) : messages.length === 0 ? (
               <div className="empty-state">
-                试试这些问题：
+                Ciallo～(∠・ω&lt; )⌒☆
                 <br />
-                1. 帮我制定一份 7 天学习计划。
-                <br />
-                2. 根据这段文字做摘要并给出行动建议。
+                欢迎回来，今天想聊点什么？
               </div>
             ) : (
               messages.map((msg, idx) => (
@@ -707,6 +650,48 @@ export default function Page() {
 
           <form ref={composerFormRef} onSubmit={onSubmit} className="composer">
             <div className="composer-stack">
+              <div className="composer-tools">
+                <input
+                  ref={uploadInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,.txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.html,.htm,.url,.webloc,.web"
+                  hidden
+                  onChange={async (e) => {
+                    const input = e.currentTarget;
+                    const files = Array.from(input.files ?? []);
+                    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+                    const docFiles = files.filter((file) => !file.type.startsWith("image/"));
+
+                    try {
+                      if (imageFiles.length > 0) {
+                        await appendImages(imageFiles);
+                      }
+                      if (docFiles.length > 0) {
+                        await appendDocuments(docFiles);
+                      }
+                      if (files.length > 0) {
+                        setModelHint("");
+                      }
+                    } catch {
+                      setModelHint("文件解析失败，请检查格式后重试。");
+                    } finally {
+                      input.value = "";
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="add-button"
+                  onClick={() => uploadInputRef.current?.click()}
+                  aria-label="添加图片或文档"
+                  title="添加图片或文档"
+                >
+                  +
+                </button>
+                <span className="composer-tools-hint">添加图片或文件</span>
+              </div>
+
               {attachments.length > 0 ? (
                 <section className="composer-attachment-strip">
                   {attachments.map((item) => (
