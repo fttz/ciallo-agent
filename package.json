@@ -2,9 +2,14 @@
   "name": "ciallo-agent",
   "private": true,
   "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev:web": "pnpm --filter @ciallo/web dev",
-    "build:web": "pnpm --filter @ciallo/web build",
-    "start:web": "pnpm --filter @ciallo/web start"
+    "dev:web": "npm run dev --workspace @ciallo/web",
+    "build:web": "npm run build --workspace @ciallo/web",
+    "start:web": "npm run start --workspace @ciallo/web",
+    "clean": "bash scripts/cleanup.sh"
   }
 }

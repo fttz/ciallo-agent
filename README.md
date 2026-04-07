@@ -67,10 +67,22 @@ uv run --directory apps/api uvicorn app.main:app --host 0.0.0.0 --port 8000
 cd apps/web && npm run dev
 ```
 
+或在仓库根目录执行：
+
+```bash
+npm run dev:web
+```
+
 5. 一键关闭并重启前后端（推荐）
 
 ```bash
 ./scripts/restart_services.sh
+```
+
+清理本地运行缓存与日志：
+
+```bash
+npm run clean
 ```
 
 脚本会自动：

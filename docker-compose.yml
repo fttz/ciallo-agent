@@ -19,7 +19,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./uploads:/app/uploads
+      - ./apps/api/uploads:/app/uploads
 
   postgres:
     image: postgres:16-alpine
