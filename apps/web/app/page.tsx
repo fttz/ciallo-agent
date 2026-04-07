@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type ModelInfo = {
   id: string;
@@ -16,12 +16,24 @@ type ChatMessage = {
     name: string;
     data_url: string;
   }>;
+  documents?: Array<{
+    name: string;
+    content: string;
+    kind: string;
+  }>;
 };
 
 type ImageAttachment = {
   id: string;
   name: string;
   dataUrl: string;
+};
+
+type DocumentAttachment = {
+  id: string;
+  name: string;
+  content: string;
+  kind: string;
 };
 
 type SessionItem = {
@@ -34,6 +46,7 @@ const API_BASE = "/backend";
 const MAX_IMAGE_DIMENSION = 1440;
 const IMAGE_REENCODE_THRESHOLD = 1.2 * 1024 * 1024;
 const MAX_ATTACHMENTS = 6;
+const MAX_DOCUMENT_ATTACHMENTS = 6;
 const STREAM_TIMEOUT_MS = 120000;
 
 const defaultModels: ModelInfo[] = [
@@ -52,14 +65,20 @@ export default function Page() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+  const [documentAttachments, setDocumentAttachments] = useState<DocumentAttachment[]>([]);
   const [modelHint, setModelHint] = useState("");
+  const [menuSessionId, setMenuSessionId] = useState("");
   const [booting, setBooting] = useState(true);
   const initializedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const docInputRef = useRef<HTMLInputElement | null>(null);
   const composerFormRef = useRef<HTMLFormElement | null>(null);
 
-  const canSend = useMemo(() => (input.trim().length > 0 || attachments.length > 0) && !loading, [input, loading, attachments.length]);
+  const canSend = useMemo(
+    () => (input.trim().length > 0 || attachments.length > 0 || documentAttachments.length > 0) && !loading,
+    [input, loading, attachments.length, documentAttachments.length]
+  );
 
   useEffect(() => {
     if (initializedRef.current) return;
@@ -78,6 +97,18 @@ export default function Page() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
+
+  useEffect(() => {
+    function onWindowClick(event: globalThis.MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest(".session-actions")) return;
+      setMenuSessionId("");
+    }
+
+    window.addEventListener("click", onWindowClick);
+    return () => window.removeEventListener("click", onWindowClick);
+  }, []);
 
   async function loadModels() {
     try {
@@ -135,6 +166,7 @@ export default function Page() {
 
   async function openSession(sessionId: string) {
     setActiveSessionId(sessionId);
+    setMenuSessionId("");
     try {
       const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/messages`);
       if (!res.ok) return;
@@ -154,6 +186,55 @@ export default function Page() {
       hour: "2-digit",
       minute: "2-digit"
     });
+  }
+
+  async function renameSession(session: SessionItem) {
+    const title = window.prompt("请输入新的会话名称", session.title)?.trim();
+    if (!title || title === session.title) {
+      setMenuSessionId("");
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions/${session.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title })
+      });
+      if (!res.ok) return;
+      await loadSessions(activeSessionId || session.id);
+    } finally {
+      setMenuSessionId("");
+    }
+  }
+
+  async function deleteSession(session: SessionItem) {
+    const confirmed = window.confirm(`确认删除会话「${session.title}」吗？`);
+    if (!confirmed) {
+      setMenuSessionId("");
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions/${session.id}`, { method: "DELETE" });
+      if (!res.ok) return;
+
+      const remains = sessions.filter((item) => item.id !== session.id);
+      if (remains.length === 0) {
+        await createSession();
+        await loadSessions();
+      } else {
+        const fallback = session.id === activeSessionId ? remains[0].id : activeSessionId;
+        await loadSessions(fallback);
+      }
+    } finally {
+      setMenuSessionId("");
+    }
+  }
+
+  function onSessionMenuToggle(event: MouseEvent<HTMLButtonElement>, sessionId: string) {
+    event.stopPropagation();
+    setMenuSessionId((current) => (current === sessionId ? "" : sessionId));
   }
 
   function getModelById(modelId: string) {
@@ -229,11 +310,49 @@ export default function Page() {
     setAttachments((prev) => prev.filter((item) => item.id !== id));
   }
 
+  function removeDocumentAttachment(id: string) {
+    setDocumentAttachments((prev) => prev.filter((item) => item.id !== id));
+  }
+
   function buildMessageImages(items: ImageAttachment[]) {
     return items.map((item) => ({
       name: item.name,
       data_url: item.dataUrl
     }));
+  }
+
+  function buildMessageDocuments(items: DocumentAttachment[]) {
+    return items.map((item) => ({
+      name: item.name,
+      content: item.content,
+      kind: item.kind
+    }));
+  }
+
+  async function appendDocuments(files: FileList | File[]) {
+    const incoming = Array.from(files);
+    if (incoming.length === 0) return;
+
+    const formData = new FormData();
+    incoming.forEach((file) => formData.append("files", file));
+
+    const res = await fetch(`${API_BASE}/api/files/parse`, {
+      method: "POST",
+      body: formData
+    });
+    if (!res.ok) {
+      throw new Error("document parse failed");
+    }
+
+    const data = await res.json();
+    const parsed: DocumentAttachment[] = (data.files || []).map((item: { filename: string; content: string; kind?: string }) => ({
+      id: `${item.filename}-${Math.random().toString(36).slice(2, 8)}`,
+      name: item.filename,
+      content: item.content,
+      kind: item.kind || "text"
+    }));
+
+    setDocumentAttachments((prev) => [...prev, ...parsed].slice(0, MAX_DOCUMENT_ATTACHMENTS));
   }
 
   function resolveModelForRequest() {
@@ -272,15 +391,18 @@ export default function Page() {
     }
 
     const hasImages = attachments.length > 0;
-    const userText = input.trim() || (hasImages ? "请分析我上传的图片。" : "");
+    const hasDocuments = documentAttachments.length > 0;
+    const userText = input.trim() || (hasImages ? "请分析我上传的图片。" : hasDocuments ? "请结合我上传的文档回答问题。" : "");
     const requestModel = resolveModelForRequest();
     const messageImages = buildMessageImages(attachments);
+    const messageDocuments = buildMessageDocuments(documentAttachments);
 
     setInput("");
     setLoading(true);
     setAttachments([]);
+    setDocumentAttachments([]);
 
-    const next = [...messages, { role: "user", content: userText, images: messageImages } as ChatMessage];
+    const next = [...messages, { role: "user", content: userText, images: messageImages, documents: messageDocuments } as ChatMessage];
     setMessages([...next, { role: "assistant", content: "" }]);
 
     const controller = new AbortController();
@@ -295,7 +417,7 @@ export default function Page() {
         body: JSON.stringify({
           model: requestModel,
           session_id: sessionId,
-          messages: [{ role: "user", content: userText, images: messageImages }],
+          messages: [{ role: "user", content: userText, images: messageImages, documents: messageDocuments }],
           images: []
         })
       });
@@ -376,15 +498,36 @@ export default function Page() {
               <div className="session-empty">暂无历史会话</div>
             ) : (
               sessions.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={item.id === activeSessionId ? "session-item session-item-active" : "session-item"}
-                  onClick={() => openSession(item.id)}
-                >
-                  <div className="session-item-title">{item.title}</div>
-                  <div className="session-item-time">{formatUpdatedAt(item.updated_at)}</div>
-                </button>
+                <article key={item.id} className={item.id === activeSessionId ? "session-item session-item-active" : "session-item"}>
+                  <button
+                    type="button"
+                    className="session-main"
+                    onClick={() => openSession(item.id)}
+                  >
+                    <div className="session-item-title">{item.title}</div>
+                    <div className="session-item-time">{formatUpdatedAt(item.updated_at)}</div>
+                  </button>
+
+                  <div className="session-actions">
+                    <button
+                      type="button"
+                      className="session-menu-button"
+                      onClick={(event) => onSessionMenuToggle(event, item.id)}
+                    >
+                      ...
+                    </button>
+                    {menuSessionId === item.id ? (
+                      <div className="session-actions-menu">
+                        <button type="button" className="session-action-item" onClick={() => renameSession(item)}>
+                          重命名
+                        </button>
+                        <button type="button" className="session-action-item session-action-danger" onClick={() => deleteSession(item)}>
+                          删除
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </article>
               ))
             )}
           </section>
@@ -442,6 +585,34 @@ export default function Page() {
             >
               上传图片
             </button>
+            <input
+              ref={docInputRef}
+              type="file"
+              multiple
+              accept=".txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.html,.htm,.url,.webloc,.web"
+              hidden
+              onChange={async (e) => {
+                const input = e.currentTarget;
+                const files = input.files;
+                try {
+                  if (files) {
+                    await appendDocuments(files);
+                    setModelHint("");
+                  }
+                } catch {
+                  setModelHint("文档解析失败，请检查文件格式或稍后重试。");
+                } finally {
+                  input.value = "";
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={() => docInputRef.current?.click()}
+            >
+              上传文档
+            </button>
           </section>
 
           {modelHint ? <section className="hint-banner">{modelHint}</section> : null}
@@ -473,6 +644,17 @@ export default function Page() {
                       ))}
                     </div>
                   ) : null}
+                  {msg.documents?.length ? (
+                    <div className="message-doc-grid">
+                      {msg.documents.map((doc, docIdx) => (
+                        <div key={`${doc.name}-${docIdx}`} className="message-doc-card">
+                          <div className="message-doc-title">{doc.name}</div>
+                          <div className="message-doc-kind">{doc.kind}</div>
+                          <div className="message-doc-preview">{doc.content}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   {msg.content}
                 </article>
               ))
@@ -489,6 +671,21 @@ export default function Page() {
                       <img src={item.dataUrl} alt={item.name} className="composer-attachment-preview" />
                       <div className="attachment-name" title={item.name}>{item.name}</div>
                       <button type="button" className="attachment-remove" onClick={() => removeAttachment(item.id)}>
+                        移除
+                      </button>
+                    </article>
+                  ))}
+                </section>
+              ) : null}
+
+              {documentAttachments.length > 0 ? (
+                <section className="composer-doc-strip">
+                  {documentAttachments.map((item) => (
+                    <article key={item.id} className="composer-doc-item">
+                      <div className="composer-doc-name" title={item.name}>{item.name}</div>
+                      <div className="composer-doc-kind">{item.kind}</div>
+                      <div className="composer-doc-preview">{item.content}</div>
+                      <button type="button" className="attachment-remove" onClick={() => removeDocumentAttachment(item.id)}>
                         移除
                       </button>
                     </article>

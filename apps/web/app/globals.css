@@ -93,8 +93,19 @@ select {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.78);
   border-radius: 12px;
+  padding: 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.session-main {
+  border: none;
+  background: transparent;
   text-align: left;
-  padding: 10px;
+  width: 100%;
+  padding: 4px;
   cursor: pointer;
 }
 
@@ -115,6 +126,53 @@ select {
   margin-top: 4px;
   font-size: 12px;
   color: var(--subtext);
+}
+
+.session-actions {
+  position: relative;
+}
+
+.session-menu-button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--subtext);
+  min-width: 30px;
+  height: 30px;
+  cursor: pointer;
+}
+
+.session-actions-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 110px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(79, 88, 181, 0.15);
+  display: grid;
+  gap: 4px;
+  z-index: 40;
+}
+
+.session-action-item {
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  padding: 8px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.session-action-item:hover {
+  background: #f3f5ff;
+}
+
+.session-action-danger {
+  color: #d24d76;
 }
 
 .session-empty {
@@ -295,6 +353,40 @@ select {
   text-overflow: ellipsis;
 }
 
+.message-doc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.message-doc-card {
+  border: 1px solid color-mix(in srgb, var(--line) 88%, #ffffff 12%);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.message-doc-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.message-doc-kind {
+  font-size: 11px;
+  color: var(--subtext);
+  margin-bottom: 6px;
+}
+
+.message-doc-preview {
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  max-height: 110px;
+  overflow: auto;
+}
+
 .message-user {
   justify-self: end;
   background: linear-gradient(145deg, rgba(255, 218, 236, 0.92), rgba(230, 237, 255, 0.86));
@@ -343,6 +435,46 @@ select {
   object-fit: cover;
   border-radius: 8px;
   border: 1px solid var(--line);
+}
+
+.composer-doc-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.composer-doc-item {
+  min-width: 220px;
+  max-width: 280px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  background: #fff;
+  display: grid;
+  gap: 6px;
+}
+
+.composer-doc-name {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-doc-kind {
+  font-size: 11px;
+  color: var(--subtext);
+}
+
+.composer-doc-preview {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--subtext);
+  max-height: 72px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 .composer-input {

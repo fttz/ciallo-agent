@@ -4,3 +4,10 @@ python-multipart==0.0.17
 pydantic==2.10.3
 pydantic-settings==2.7.0
 httpx==0.28.1
+langchain==0.3.24
+langchain-community==0.3.22
+pypdf==5.4.0
+docx2txt==0.8
+unstructured==0.17.2
+python-pptx==1.0.2
+beautifulsoup4==4.12.3

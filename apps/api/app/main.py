@@ -1,13 +1,13 @@
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .config import settings
-from .file_parser import save_upload_file
+from .file_parser import parse_uploaded_file, save_upload_file
 from .model_gateway import list_models, stream_chat_completion
-from .schemas import ChatRequest, SessionCreateRequest, SessionItem, UserSettings
+from .schemas import ChatRequest, ParsedFile, SessionCreateRequest, SessionItem, SessionUpdateRequest, UserSettings
 from .session_store import SessionStore
 
 app = FastAPI(title=settings.app_name)
@@ -49,6 +49,22 @@ def get_session_messages(session_id: str):
     return SESSION_STORE.get_messages(session_id)
 
 
+@app.patch("/api/sessions/{session_id}")
+def rename_session(session_id: str, payload: SessionUpdateRequest) -> SessionItem:
+    updated = SESSION_STORE.rename_session(session_id, payload.title)
+    if not updated:
+        raise HTTPException(status_code=404, detail="session not found")
+    return updated
+
+
+@app.delete("/api/sessions/{session_id}")
+def delete_session(session_id: str) -> dict:
+    deleted = SESSION_STORE.delete_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"ok": True}
+
+
 @app.get("/api/settings")
 def get_settings() -> UserSettings:
     return USER_SETTINGS
@@ -70,7 +86,13 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
     if payload.session_id and payload.messages:
         last_user = payload.messages[-1]
         if last_user.role == "user":
-            SESSION_STORE.append_message(payload.session_id, "user", last_user.content, last_user.images)
+            SESSION_STORE.append_message(
+                payload.session_id,
+                "user",
+                last_user.content,
+                last_user.images,
+                last_user.documents,
+            )
 
     async def event_stream() -> AsyncGenerator[str, None]:
         assistant_parts: list[str] = []
@@ -95,3 +117,18 @@ async def upload_files(files: list[UploadFile] = File(...)):
         saved.append(await save_upload_file(settings.upload_dir, file))
 
     return {"count": len(saved), "files": saved}
+
+
+@app.post("/api/files/parse")
+async def parse_files(files: list[UploadFile] = File(...)) -> dict:
+    parsed: list[ParsedFile] = []
+    for file in files:
+        item = await parse_uploaded_file(
+            settings.upload_dir,
+            file,
+            max_chars=settings.parser_max_chars,
+            web_fetch_timeout_sec=settings.web_fetch_timeout_sec,
+        )
+        parsed.append(ParsedFile(**item))
+
+    return {"count": len(parsed), "files": parsed}

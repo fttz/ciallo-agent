@@ -4,7 +4,7 @@ from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
-from .schemas import ChatImage, ChatMessage, SessionItem
+from .schemas import ChatDocument, ChatImage, ChatMessage, SessionItem
 
 
 class SessionStore:
@@ -68,6 +68,29 @@ class SessionStore:
             self._write_data(data)
             return SessionItem(id=item["id"], title=item["title"], updated_at=item["updated_at"])
 
+    def rename_session(self, session_id: str, title: str) -> SessionItem | None:
+        cleaned = title.strip() or "新会话"
+        with self._lock:
+            data = self._read_data()
+            item = self._find_session(data["sessions"], session_id)
+            if not item:
+                return None
+
+            item["title"] = cleaned
+            item["updated_at"] = self._now()
+            self._write_data(data)
+            return SessionItem(id=item["id"], title=item["title"], updated_at=item["updated_at"])
+
+    def delete_session(self, session_id: str) -> bool:
+        with self._lock:
+            data = self._read_data()
+            original_len = len(data["sessions"])
+            data["sessions"] = [item for item in data["sessions"] if item.get("id") != session_id]
+            if len(data["sessions"]) == original_len:
+                return False
+            self._write_data(data)
+            return True
+
     def get_messages(self, session_id: str) -> list[ChatMessage]:
         with self._lock:
             data = self._read_data()
@@ -86,13 +109,33 @@ class SessionStore:
                         data_url = image.get("data_url") if isinstance(image, dict) else None
                         if isinstance(name, str) and isinstance(data_url, str):
                             images.append(ChatImage(name=name, data_url=data_url))
-                    messages.append(ChatMessage(role=role, content=content, images=images))
+
+                    documents: list[ChatDocument] = []
+                    for document in message.get("documents", []):
+                        name = document.get("name") if isinstance(document, dict) else None
+                        doc_content = document.get("content") if isinstance(document, dict) else None
+                        kind = document.get("kind") if isinstance(document, dict) else "text"
+                        if isinstance(name, str) and isinstance(doc_content, str):
+                            documents.append(ChatDocument(name=name, content=doc_content, kind=str(kind or "text")))
+
+                    messages.append(ChatMessage(role=role, content=content, images=images, documents=documents))
             return messages
 
-    def append_message(self, session_id: str, role: str, content: str, images: list[ChatImage] | None = None) -> bool:
+    def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        images: list[ChatImage] | None = None,
+        documents: list[ChatDocument] | None = None,
+    ) -> bool:
         text = content.strip()
         serialized_images = [{"name": image.name, "data_url": image.data_url} for image in images or []]
-        if not text and not serialized_images:
+        serialized_documents = [
+            {"name": document.name, "content": document.content, "kind": document.kind}
+            for document in documents or []
+        ]
+        if not text and not serialized_images and not serialized_documents:
             return False
 
         with self._lock:
@@ -102,7 +145,13 @@ class SessionStore:
                 return False
 
             item.setdefault("messages", []).append(
-                {"role": role, "content": text, "images": serialized_images, "created_at": self._now()}
+                {
+                    "role": role,
+                    "content": text,
+                    "images": serialized_images,
+                    "documents": serialized_documents,
+                    "created_at": self._now(),
+                }
             )
             if role == "user" and (item.get("title") in (None, "", "新会话")):
                 item["title"] = text[:24] or "新会话"

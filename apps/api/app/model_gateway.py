@@ -83,14 +83,35 @@ def resolve_model(requested_model: str, has_images: bool = False) -> str:
 def _build_messages(payload: ChatRequest) -> list[dict]:
     messages: list[dict] = []
 
+    def attach_document_context(text: str, documents: list) -> str:
+        if not documents:
+            return text
+
+        document_blocks: list[str] = []
+        for index, document in enumerate(documents):
+            name = document.name if hasattr(document, "name") else document.get("name", f"文档{index + 1}")
+            kind = document.kind if hasattr(document, "kind") else document.get("kind", "text")
+            content = document.content if hasattr(document, "content") else document.get("content", "")
+            document_blocks.append(f"[{index + 1}] {name} ({kind})\n{content}")
+
+        context = "\n\n".join(document_blocks)
+        return (
+            "你将收到用户上传的文档解析内容。回答问题时，请优先依据文档内容作答；"
+            "如果文档信息不足，再明确指出缺口并给出下一步建议。\n\n"
+            f"【文档上下文】\n{context}\n\n"
+            f"【用户问题】\n{text}"
+        )
+
     for idx, item in enumerate(payload.messages):
         item_images = list(item.images)
+        item_documents = list(item.documents)
+        content_text = attach_document_context(item.content, item_documents) if item.role == "user" else item.content
         is_last_user = idx == len(payload.messages) - 1 and item.role == "user"
         if is_last_user and payload.images and not item_images:
             item_images = [{"name": f"image-{i + 1}", "data_url": image} for i, image in enumerate(payload.images)]
 
         if item_images:
-            multimodal_parts = [{"type": "text", "text": item.content}]
+            multimodal_parts = [{"type": "text", "text": content_text}]
             for image in item_images:
                 multimodal_parts.append(
                     {
@@ -102,7 +123,7 @@ def _build_messages(payload: ChatRequest) -> list[dict]:
                 )
             messages.append({"role": item.role, "content": multimodal_parts})
         else:
-            messages.append({"role": item.role, "content": item.content})
+            messages.append({"role": item.role, "content": content_text})
     return messages
 
 

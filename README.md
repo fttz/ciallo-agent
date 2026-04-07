@@ -37,13 +37,55 @@ infra/
 cp .env.example .env
 ```
 
-2. 使用 Docker 启动
+2. 使用 uv 初始化 Python 运行环境
+
+```bash
+uv sync
+```
+
+如果你在中国，建议优先使用清华 PyPI 镜像：
+
+```bash
+UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple uv sync
+```
+
+如果看到 uv 关于 hardlink 的警告，可以一并指定：
+
+```bash
+UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple UV_LINK_MODE=copy uv sync
+```
+
+3. 启动后端
+
+```bash
+uv run --directory apps/api uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+4. 启动前端
+
+```bash
+cd apps/web && npm run dev
+```
+
+5. 一键关闭并重启前后端（推荐）
+
+```bash
+./scripts/restart_services.sh
+```
+
+脚本会自动：
+
+- 关闭当前占用 `8000/3000` 端口的旧服务
+- 重启 FastAPI 后端与 Next.js 前端
+- 将 PID 与日志写入 `.run/`
+
+6. 或使用 Docker 启动
 
 ```bash
 docker compose up --build
 ```
 
-3. 访问地址
+7. 访问地址
 
 - 前端：http://localhost:3000
 - 后端健康检查：http://localhost:8000/api/health

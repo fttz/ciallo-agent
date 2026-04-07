@@ -6,10 +6,17 @@ class ChatImage(BaseModel):
     data_url: str
 
 
+class ChatDocument(BaseModel):
+    name: str
+    content: str
+    kind: str = "text"
+
+
 class ChatMessage(BaseModel):
     role: str = Field(pattern="^(user|assistant|system)$")
     content: str
     images: list[ChatImage] = []
+    documents: list[ChatDocument] = []
 
 
 class ChatRequest(BaseModel):
@@ -23,10 +30,21 @@ class SessionCreateRequest(BaseModel):
     title: str | None = None
 
 
+class SessionUpdateRequest(BaseModel):
+    title: str
+
+
 class SessionItem(BaseModel):
     id: str
     title: str
     updated_at: str
+
+
+class ParsedFile(BaseModel):
+    filename: str
+    size: int
+    kind: str
+    content: str
 
 
 class UserSettings(BaseModel):

@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     upload_dir: str = "./uploads"
     max_upload_mb: int = 20
+    parser_max_chars: int = 12000
+    web_fetch_timeout_sec: int = 15
     model_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model_api_key: str = ""
     model_default: str = "qwen3.5-plus"
