@@ -14,6 +14,9 @@ type ModelInfo = {
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
+  reasoning?: string;
+  reasoningStreaming?: boolean;
+  reasoningCollapsed?: boolean;
   images?: Array<{
     name: string;
     data_url: string;
@@ -58,19 +61,42 @@ const defaultModels: ModelInfo[] = [
   { id: "qwen-vl-max-latest", name: "Qwen VL Max Latest", capabilities: ["text", "vision"] }
 ];
 
-function renderMessageContent(message: ChatMessage) {
+function renderMessageContent(message: ChatMessage, onToggleReasoning?: () => void) {
   if (message.role === "assistant") {
+    const hasReasoning = Boolean(message.reasoning?.trim());
+    const isStreamingReasoning = Boolean(message.reasoningStreaming);
+    const shouldShowReasoning = hasReasoning && (isStreamingReasoning || !message.reasoningCollapsed);
+
     return (
-      <div className="markdown-body">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
-          }}
-        >
-          {message.content}
-        </ReactMarkdown>
-      </div>
+      <>
+        {hasReasoning ? (
+          <div className="reasoning-section">
+            <button
+              type="button"
+              className={isStreamingReasoning ? "reasoning-toggle reasoning-toggle-streaming" : "reasoning-toggle"}
+              onClick={onToggleReasoning}
+              disabled={isStreamingReasoning}
+            >
+              {isStreamingReasoning
+                ? "思考中..."
+                : message.reasoningCollapsed
+                  ? "展开思考内容"
+                  : "收起思考内容"}
+            </button>
+            {shouldShowReasoning ? <pre className="reasoning-block">{message.reasoning}</pre> : null}
+          </div>
+        ) : null}
+        <div className="markdown-body">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+            }}
+          >
+            {message.content}
+          </ReactMarkdown>
+        </div>
+      </>
     );
   }
 
@@ -85,6 +111,7 @@ export default function Page() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
   const [documentAttachments, setDocumentAttachments] = useState<DocumentAttachment[]>([]);
   const [modelHint, setModelHint] = useState("");
@@ -145,7 +172,7 @@ export default function Page() {
     }
   }
 
-  async function loadSessions(preferredId?: string) {
+  async function loadSessions(preferredId?: string, options?: { keepCurrentMessages?: boolean }) {
     try {
       const res = await fetch(`${API_BASE}/api/sessions`);
       if (!res.ok) return;
@@ -160,7 +187,11 @@ export default function Page() {
       }
 
       const selected = data.find((item) => item.id === targetId) ?? data[0];
-      await openSession(selected.id);
+      if (options?.keepCurrentMessages) {
+        setActiveSessionId(selected.id);
+      } else {
+        await openSession(selected.id);
+      }
     } catch {
       // keep current state on network failure
     }
@@ -423,7 +454,16 @@ export default function Page() {
     setDocumentAttachments([]);
 
     const next = [...messages, { role: "user", content: userText, images: messageImages, documents: messageDocuments } as ChatMessage];
-    setMessages([...next, { role: "assistant", content: "" }]);
+    setMessages([
+      ...next,
+      {
+        role: "assistant",
+        content: "",
+        reasoning: "",
+        reasoningStreaming: thinkingEnabled,
+        reasoningCollapsed: false,
+      },
+    ]);
 
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
@@ -437,6 +477,7 @@ export default function Page() {
         body: JSON.stringify({
           model: requestModel,
           session_id: sessionId,
+          enable_thinking: thinkingEnabled,
           messages: [{ role: "user", content: userText, images: messageImages, documents: messageDocuments }],
           images: []
         })
@@ -474,10 +515,14 @@ export default function Page() {
           if (!payloadText || payloadText === "[DONE]") continue;
 
           let piece = payloadText;
+          let pieceType: "content" | "reasoning" = "content";
           try {
-            const parsed = JSON.parse(payloadText) as { token?: string };
+            const parsed = JSON.parse(payloadText) as { token?: string; type?: "content" | "reasoning" };
             if (typeof parsed.token === "string") {
               piece = parsed.token;
+            }
+            if (parsed.type === "reasoning" || parsed.type === "content") {
+              pieceType = parsed.type;
             }
           } catch {
             // Backward-compatible fallback for plain `data: token` payloads.
@@ -489,16 +534,47 @@ export default function Page() {
             const updated = [...current];
             const last = updated.at(-1);
             if (!last || last.role !== "assistant") {
-              updated.push({ role: "assistant", content: piece });
+              updated.push({
+                role: "assistant",
+                content: pieceType === "content" ? piece : "",
+                reasoning: pieceType === "reasoning" ? piece : "",
+                reasoningStreaming: pieceType === "reasoning",
+                reasoningCollapsed: false,
+              });
               return updated;
             }
-            updated[updated.length - 1] = { ...last, content: `${last.content}${piece}` };
+            if (pieceType === "reasoning") {
+              updated[updated.length - 1] = {
+                ...last,
+                reasoning: `${last.reasoning ?? ""}${piece}`,
+                reasoningStreaming: true,
+                reasoningCollapsed: false,
+              };
+            } else {
+              updated[updated.length - 1] = { ...last, content: `${last.content}${piece}` };
+            }
             return updated;
           });
         }
 
         if (done) break;
       }
+
+      setMessages((current) => {
+        const updated = [...current];
+        const last = updated.at(-1);
+        if (!last || last.role !== "assistant") {
+          return updated;
+        }
+
+        const hasReasoning = Boolean(last.reasoning?.trim());
+        updated[updated.length - 1] = {
+          ...last,
+          reasoningStreaming: false,
+          reasoningCollapsed: hasReasoning,
+        };
+        return updated;
+      });
 
     } catch (error) {
       const timeoutMessage = error instanceof DOMException && error.name === "AbortError"
@@ -508,7 +584,7 @@ export default function Page() {
     } finally {
       window.clearTimeout(timeoutId);
       setLoading(false);
-      await loadSessions(sessionId);
+      await loadSessions(sessionId, { keepCurrentMessages: true });
     }
   }
 
@@ -641,7 +717,22 @@ export default function Page() {
                       ))}
                     </div>
                   ) : null}
-                  {renderMessageContent(msg)}
+                  {renderMessageContent(
+                    msg,
+                    msg.role === "assistant"
+                      ? () => {
+                        setMessages((current) => {
+                          const updated = [...current];
+                          const target = updated[idx];
+                          if (!target || target.role !== "assistant" || target.reasoningStreaming) {
+                            return updated;
+                          }
+                          updated[idx] = { ...target, reasoningCollapsed: !target.reasoningCollapsed };
+                          return updated;
+                        });
+                      }
+                      : undefined
+                  )}
                 </article>
               ))
             )}
@@ -690,6 +781,15 @@ export default function Page() {
                   +
                 </button>
                 <span className="composer-tools-hint">添加图片或文件</span>
+                <button
+                  type="button"
+                  className={thinkingEnabled ? "thinking-toggle thinking-toggle-on" : "thinking-toggle"}
+                  onClick={() => setThinkingEnabled((value) => !value)}
+                  aria-label="切换思考模式"
+                  title="切换思考模式"
+                >
+                  {thinkingEnabled ? "思考模式: 开" : "思考模式: 关"}
+                </button>
               </div>
 
               {attachments.length > 0 ? (

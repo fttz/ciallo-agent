@@ -8,8 +8,9 @@ from fastapi.responses import StreamingResponse
 from .config import settings
 from .file_parser import parse_uploaded_file, save_upload_file
 from .model_gateway import list_models, stream_chat_completion
-from .schemas import ChatRequest, ParsedFile, SessionCreateRequest, SessionItem, SessionUpdateRequest, UserSettings
+from .schemas import ChatMessage, ChatRequest, ParsedFile, SessionCreateRequest, SessionItem, SessionUpdateRequest, UserSettings
 from .session_store import SessionStore
+from .web_search import build_web_search_context
 
 app = FastAPI(title=settings.app_name)
 
@@ -82,7 +83,35 @@ def update_settings(payload: UserSettings) -> UserSettings:
 async def chat_stream(payload: ChatRequest) -> StreamingResponse:
     stored_history = SESSION_STORE.get_messages(payload.session_id) if payload.session_id else []
     merged_messages = [*stored_history, *payload.messages]
-    request_payload = ChatRequest(model=payload.model, messages=merged_messages, images=payload.images)
+    web_search_outcome = await build_web_search_context(merged_messages)
+    messages_for_model = merged_messages
+
+    if web_search_outcome.used and web_search_outcome.context:
+        messages_for_model = []
+        injected = False
+        for index, message in enumerate(merged_messages):
+            is_last_user = index == len(merged_messages) - 1 and message.role == "user"
+            if is_last_user:
+                messages_for_model.append(
+                    ChatMessage(
+                        role=message.role,
+                        content=f"{message.content}\n\n{web_search_outcome.context}",
+                        images=message.images,
+                        documents=message.documents,
+                    )
+                )
+                injected = True
+            else:
+                messages_for_model.append(message)
+        if not injected:
+            messages_for_model = merged_messages
+
+    request_payload = ChatRequest(
+        model=payload.model,
+        messages=messages_for_model,
+        images=payload.images,
+        enable_thinking=payload.enable_thinking,
+    )
 
     if payload.session_id and payload.messages:
         last_user = payload.messages[-1]
@@ -97,10 +126,15 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
 
     async def event_stream() -> AsyncGenerator[str, None]:
         assistant_parts: list[str] = []
-        async for token in stream_chat_completion(request_payload):
-            assistant_parts.append(token)
+        async for chunk in stream_chat_completion(request_payload):
+            token = chunk.get("text", "")
+            token_type = chunk.get("type", "content")
+            if not token:
+                continue
+            if token_type == "content":
+                assistant_parts.append(token)
             # Use JSON payload to keep SSE framing valid even when token contains newlines.
-            yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'token': token, 'type': token_type}, ensure_ascii=False)}\n\n"
 
         if payload.session_id:
             assistant_text = "".join(assistant_parts).strip()

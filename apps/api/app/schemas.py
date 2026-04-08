@@ -24,6 +24,7 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     images: list[str] = []
     session_id: str | None = None
+    enable_thinking: bool | None = None
 
 
 class SessionCreateRequest(BaseModel):

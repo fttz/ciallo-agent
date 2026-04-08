@@ -83,6 +83,12 @@ def resolve_model(requested_model: str, has_images: bool = False) -> str:
 def _build_messages(payload: ChatRequest) -> list[dict]:
     messages: list[dict] = []
 
+    if settings.system_prompt_enabled:
+        prompt_text = settings.system_prompt_template.strip()
+        has_system_message = any(item.role == "system" for item in payload.messages)
+        if prompt_text and not has_system_message:
+            messages.append({"role": "system", "content": prompt_text})
+
     def attach_document_context(text: str, documents: list) -> str:
         if not documents:
             return text
@@ -127,18 +133,20 @@ def _build_messages(payload: ChatRequest) -> list[dict]:
     return messages
 
 
-async def stream_chat_completion(payload: ChatRequest) -> AsyncGenerator[str, None]:
+async def stream_chat_completion(payload: ChatRequest) -> AsyncGenerator[dict[str, str], None]:
     has_images = len(payload.images) > 0 or any(message.images for message in payload.messages)
     selected_model = resolve_model(payload.model, has_images=has_images)
+    thinking_enabled = settings.model_enable_thinking if payload.enable_thinking is None else payload.enable_thinking
 
     if not settings.model_api_key.strip():
-        yield "未检测到 MODEL_API_KEY，请先在环境变量中配置后再试。"
+        yield {"type": "content", "text": "未检测到 MODEL_API_KEY，请先在环境变量中配置后再试。"}
         return
 
     endpoint = f"{settings.model_base_url.rstrip('/')}/chat/completions"
     body = {
         "model": selected_model,
         "stream": True,
+        "enable_thinking": thinking_enabled,
         "messages": _build_messages(payload),
     }
     headers = {
@@ -152,7 +160,7 @@ async def stream_chat_completion(payload: ChatRequest) -> AsyncGenerator[str, No
                 if response.status_code >= 400:
                     detail_raw = await response.aread()
                     detail = detail_raw.decode("utf-8", errors="ignore").strip()
-                    yield f"模型调用失败（HTTP {response.status_code}）：{detail or '请检查模型配置。'}"
+                    yield {"type": "content", "text": f"模型调用失败（HTTP {response.status_code}）：{detail or '请检查模型配置。'}"}
                     return
                 async for line in response.aiter_lines():
                     if not line or not line.startswith("data:"):
@@ -173,13 +181,24 @@ async def stream_chat_completion(payload: ChatRequest) -> AsyncGenerator[str, No
                     if not choices:
                         continue
                     delta = choices[0].get("delta") or {}
+
+                    if thinking_enabled:
+                        reasoning_content = delta.get("reasoning_content")
+                        if isinstance(reasoning_content, str) and reasoning_content:
+                            yield {"type": "reasoning", "text": reasoning_content}
+                        elif isinstance(reasoning_content, list):
+                            for segment in reasoning_content:
+                                text = segment.get("text") if isinstance(segment, dict) else None
+                                if text:
+                                    yield {"type": "reasoning", "text": text}
+
                     content = delta.get("content")
                     if isinstance(content, str) and content:
-                        yield content
+                        yield {"type": "content", "text": content}
                     elif isinstance(content, list):
                         for segment in content:
                             text = segment.get("text") if isinstance(segment, dict) else None
                             if text:
-                                yield text
+                                yield {"type": "content", "text": text}
     except Exception as exc:  # noqa: BLE001
-        yield f"模型调用异常：{exc}"
+        yield {"type": "content", "text": f"模型调用异常：{exc}"}

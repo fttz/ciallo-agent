@@ -537,6 +537,64 @@ select {
   color: var(--subtext);
 }
 
+.thinking-toggle {
+  margin-left: 8px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--subtext);
+  padding: 0 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.thinking-toggle-on {
+  border-color: #ff6fae;
+  background: linear-gradient(145deg, rgba(255, 126, 184, 0.18), rgba(255, 90, 163, 0.18));
+  color: #8f2558;
+  font-weight: 700;
+}
+
+.reasoning-block {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in srgb, var(--line) 80%, #ffffff 20%);
+  background: rgba(247, 247, 255, 0.9);
+  color: #5f628f;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.reasoning-section {
+  margin-bottom: 10px;
+}
+
+.reasoning-toggle {
+  border: 1px solid color-mix(in srgb, var(--line) 84%, #ffffff 16%);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #5f628f;
+  font-size: 12px;
+  line-height: 1;
+  padding: 8px 10px;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.reasoning-toggle:hover {
+  background: #f3f5ff;
+}
+
+.reasoning-toggle-streaming {
+  cursor: default;
+  opacity: 0.9;
+}
+
 .composer-attachment-strip {
   display: flex;
   gap: 10px;
