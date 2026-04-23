@@ -24,16 +24,31 @@ async function proxy(request: NextRequest, path: string[]) {
     duplex: "half"
   } as RequestInit;
 
-  const upstream = await fetch(targetUrl, init);
-  const responseHeaders = new Headers(upstream.headers);
-  responseHeaders.set("Cache-Control", "no-cache, no-transform");
-  responseHeaders.set("X-Accel-Buffering", "no");
+  try {
+    const upstream = await fetch(targetUrl, init);
+    const responseHeaders = new Headers(upstream.headers);
+    responseHeaders.set("Cache-Control", "no-cache, no-transform");
+    responseHeaders.set("X-Accel-Buffering", "no");
 
-  return new Response(upstream.body, {
-    status: upstream.status,
-    statusText: upstream.statusText,
-    headers: responseHeaders
-  });
+    return new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: responseHeaders
+    });
+  } catch (error) {
+    console.error("API proxy request failed", {
+      targetUrl,
+      method: request.method,
+      error,
+    });
+    return Response.json(
+      {
+        detail: "proxy request failed",
+        targetUrl,
+      },
+      { status: 502 }
+    );
+  }
 }
 
 export async function GET(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
@@ -47,6 +62,11 @@ export async function POST(request: NextRequest, context: { params: Promise<{ pa
 }
 
 export async function PUT(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
+  const params = await context.params;
+  return proxy(request, params.path);
+}
+
+export async function PATCH(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   const params = await context.params;
   return proxy(request, params.path);
 }
