@@ -14,7 +14,7 @@
 - 模型列表接口
 - 流式聊天接口（占位实现）
 - 文件上传接口（占位实现）
-- Docker Compose 本地编排
+- 本地一键启动脚本
 
 ## 项目结构
 
@@ -25,8 +25,8 @@ apps/
 docs/
   requirements.md
   technical-selection.md
-infra/
-  docker/
+scripts/
+  restart_services.sh
 ```
 
 ## 本地启动
@@ -90,12 +90,6 @@ npm run clean
 - 关闭当前占用 `8000/3000` 端口的旧服务
 - 重启 FastAPI 后端与 Next.js 前端
 - 将 PID 与日志写入 `.run/`
-
-6. 或使用 Docker 启动
-
-```bash
-docker compose up --build
-```
 
 7. 访问地址
 

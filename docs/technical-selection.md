@@ -34,7 +34,7 @@
 - 对象存储：S3 兼容存储（开发环境可用 MinIO）
 - 实时输出：SSE 优先，必要时补充 WebSocket
 - 文件解析：Python 生态解析库 + 统一解析服务
-- 部署：Docker Compose 起步，后续可升级 Kubernetes
+- 部署：本地直接启动（uv + npm），后续可按需升级
 
 ### 2.2 为什么选这套方案
 
@@ -341,9 +341,8 @@ apps/
 packages/
   shared/
   ui/
-infra/
-  docker/
 docs/
+scripts/
 ```
 
 ### 说明
@@ -352,7 +351,7 @@ docs/
 - apps/api：FastAPI 后端
 - packages/shared：共享类型、协议定义
 - packages/ui：可复用 UI 组件
-- infra/docker：本地部署与容器配置
+- scripts/：本地启动与运维脚本
 - docs：需求、架构、接口文档
 
 ## 8. 开发优先级建议
