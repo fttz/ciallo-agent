@@ -158,3 +158,22 @@ class SessionStore:
             item["updated_at"] = self._now()
             self._write_data(data)
             return True
+
+    def remove_trailing_assistant(self, session_id: str) -> bool:
+        with self._lock:
+            data = self._read_data()
+            item = self._find_session(data["sessions"], session_id)
+            if not item:
+                return False
+
+            messages = item.get("messages", [])
+            if not isinstance(messages, list) or not messages:
+                return False
+            last = messages[-1]
+            if not isinstance(last, dict) or last.get("role") != "assistant":
+                return False
+
+            messages.pop()
+            item["updated_at"] = self._now()
+            self._write_data(data)
+            return True

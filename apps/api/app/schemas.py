@@ -27,6 +27,11 @@ class ChatRequest(BaseModel):
     enable_thinking: bool | None = None
 
 
+class RegenerateRequest(BaseModel):
+    model: str
+    enable_thinking: bool | None = None
+
+
 class SessionCreateRequest(BaseModel):
     title: str | None = None
 

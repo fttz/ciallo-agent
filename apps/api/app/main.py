@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from .config import settings
 from .file_parser import parse_uploaded_file, save_upload_file
 from .model_gateway import list_models, stream_chat_completion
-from .schemas import ChatMessage, ChatRequest, ParsedFile, SessionCreateRequest, SessionItem, SessionUpdateRequest, UserSettings
+from .schemas import ChatMessage, ChatRequest, ParsedFile, RegenerateRequest, SessionCreateRequest, SessionItem, SessionUpdateRequest, UserSettings
 from .session_store import SessionStore
 from .web_search import build_web_search_context
 
@@ -140,6 +140,66 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
             assistant_text = "".join(assistant_parts).strip()
             if assistant_text:
                 SESSION_STORE.append_message(payload.session_id, "assistant", assistant_text)
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/sessions/{session_id}/regenerate")
+async def regenerate_last_answer(session_id: str, payload: RegenerateRequest) -> StreamingResponse:
+    SESSION_STORE.remove_trailing_assistant(session_id)
+    stored_history = SESSION_STORE.get_messages(session_id)
+    if not stored_history or stored_history[-1].role != "user":
+        raise HTTPException(status_code=400, detail="no user message to regenerate")
+
+    web_search_outcome = await build_web_search_context(stored_history)
+    messages_for_model = stored_history
+
+    if web_search_outcome.used and web_search_outcome.context:
+        messages_for_model = []
+        for index, message in enumerate(stored_history):
+            is_last_user = index == len(stored_history) - 1 and message.role == "user"
+            if is_last_user:
+                messages_for_model.append(
+                    ChatMessage(
+                        role=message.role,
+                        content=f"{message.content}\n\n{web_search_outcome.context}",
+                        images=message.images,
+                        documents=message.documents,
+                    )
+                )
+            else:
+                messages_for_model.append(message)
+
+    request_payload = ChatRequest(
+        model=payload.model,
+        messages=messages_for_model,
+        enable_thinking=payload.enable_thinking,
+    )
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        assistant_parts: list[str] = []
+        async for chunk in stream_chat_completion(request_payload):
+            token = chunk.get("text", "")
+            token_type = chunk.get("type", "content")
+            if not token:
+                continue
+            if token_type == "content":
+                assistant_parts.append(token)
+            yield f"data: {json.dumps({'token': token, 'type': token_type}, ensure_ascii=False)}\n\n"
+
+        assistant_text = "".join(assistant_parts).strip()
+        if assistant_text:
+            SESSION_STORE.append_message(session_id, "assistant", assistant_text)
 
         yield "data: [DONE]\n\n"
 

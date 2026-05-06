@@ -121,6 +121,9 @@ export default function Page() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const composerFormRef = useRef<HTMLFormElement | null>(null);
+  const streamControllerRef = useRef<AbortController | null>(null);
+  const stopRequestedRef = useRef(false);
+  const timeoutRequestedRef = useRef(false);
 
   const canSend = useMemo(
     () => (input.trim().length > 0 || attachments.length > 0 || documentAttachments.length > 0) && !loading,
@@ -301,6 +304,20 @@ export default function Page() {
     });
   }
 
+  function isHeicFile(file: File) {
+    const name = file.name.toLowerCase();
+    return file.type === "image/heic" || file.type === "image/heif" || name.endsWith(".heic") || name.endsWith(".heif");
+  }
+
+  async function blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("blob read failed"));
+      reader.readAsDataURL(blob);
+    });
+  }
+
   async function loadImageElement(dataUrl: string): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
       const image = new Image();
@@ -311,8 +328,19 @@ export default function Page() {
   }
 
   async function fileToDataUrl(file: File): Promise<string> {
-    const originalDataUrl = await readFileAsDataUrl(file);
+    let originalDataUrl = await readFileAsDataUrl(file);
     const shouldOptimize = file.size > IMAGE_REENCODE_THRESHOLD;
+
+    if (isHeicFile(file)) {
+      const heic2any = (await import("heic2any")).default;
+      const converted = await heic2any({
+        blob: file,
+        toType: "image/jpeg",
+        quality: 0.86,
+      });
+      const jpegBlob = Array.isArray(converted) ? converted[0] : converted;
+      originalDataUrl = await blobToDataUrl(jpegBlob);
+    }
 
     try {
       const image = await loadImageElement(originalDataUrl);
@@ -343,7 +371,7 @@ export default function Page() {
   }
 
   async function appendImages(files: FileList | File[]) {
-    const incoming = Array.from(files).filter((file) => file.type.startsWith("image/"));
+    const incoming = Array.from(files).filter((file) => file.type.startsWith("image/") || isHeicFile(file));
     if (incoming.length === 0) return;
 
     const converted = await Promise.all(
@@ -429,6 +457,106 @@ export default function Page() {
     return model;
   }
 
+  function stopGeneration() {
+    if (!streamControllerRef.current) return;
+    stopRequestedRef.current = true;
+    streamControllerRef.current.abort();
+  }
+
+  async function consumeAssistantStream(res: Response) {
+    if (!res.ok || !res.body) {
+      throw new Error("stream unavailable");
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = events.pop() ?? "";
+
+      for (const eventChunk of events) {
+        const lines = eventChunk.split(/\r?\n/);
+        const payloadLines: string[] = [];
+
+        for (const rawLine of lines) {
+          const line = rawLine.trimEnd();
+          if (!line.startsWith("data:")) continue;
+          payloadLines.push(line.slice(5).trimStart());
+        }
+
+        if (payloadLines.length === 0) continue;
+
+        const payloadText = payloadLines.join("\n");
+        if (!payloadText || payloadText === "[DONE]") continue;
+
+        let piece = payloadText;
+        let pieceType: "content" | "reasoning" = "content";
+        try {
+          const parsed = JSON.parse(payloadText) as { token?: string; type?: "content" | "reasoning" };
+          if (typeof parsed.token === "string") {
+            piece = parsed.token;
+          }
+          if (parsed.type === "reasoning" || parsed.type === "content") {
+            pieceType = parsed.type;
+          }
+        } catch {
+          // Backward-compatible fallback for plain `data: token` payloads.
+        }
+
+        if (!piece) continue;
+
+        setMessages((current) => {
+          const updated = [...current];
+          const last = updated.at(-1);
+          if (!last || last.role !== "assistant") {
+            updated.push({
+              role: "assistant",
+              content: pieceType === "content" ? piece : "",
+              reasoning: pieceType === "reasoning" ? piece : "",
+              reasoningStreaming: pieceType === "reasoning",
+              reasoningCollapsed: false,
+            });
+            return updated;
+          }
+          if (pieceType === "reasoning") {
+            updated[updated.length - 1] = {
+              ...last,
+              reasoning: `${last.reasoning ?? ""}${piece}`,
+              reasoningStreaming: true,
+              reasoningCollapsed: false,
+            };
+          } else {
+            updated[updated.length - 1] = { ...last, content: `${last.content}${piece}` };
+          }
+          return updated;
+        });
+      }
+
+      if (done) break;
+    }
+
+    setMessages((current) => {
+      const updated = [...current];
+      const last = updated.at(-1);
+      if (!last || last.role !== "assistant") {
+        return updated;
+      }
+
+      const hasReasoning = Boolean(last.reasoning?.trim());
+      updated[updated.length - 1] = {
+        ...last,
+        reasoningStreaming: false,
+        reasoningCollapsed: hasReasoning,
+      };
+      return updated;
+    });
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!canSend) return;
@@ -466,7 +594,13 @@ export default function Page() {
     ]);
 
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
+    streamControllerRef.current = controller;
+    stopRequestedRef.current = false;
+    timeoutRequestedRef.current = false;
+    const timeoutId = window.setTimeout(() => {
+      timeoutRequestedRef.current = true;
+      controller.abort();
+    }, STREAM_TIMEOUT_MS);
 
     try {
 
@@ -483,108 +617,94 @@ export default function Page() {
         })
       });
 
-      if (!res.ok || !res.body) {
-        window.clearTimeout(timeoutId);
-        throw new Error("stream unavailable");
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-
-        const events = buffer.split(/\r?\n\r?\n/);
-        buffer = events.pop() ?? "";
-
-        for (const eventChunk of events) {
-          const lines = eventChunk.split(/\r?\n/);
-          const payloadLines: string[] = [];
-
-          for (const rawLine of lines) {
-            const line = rawLine.trimEnd();
-            if (!line.startsWith("data:")) continue;
-            payloadLines.push(line.slice(5).trimStart());
-          }
-
-          if (payloadLines.length === 0) continue;
-
-          const payloadText = payloadLines.join("\n");
-          if (!payloadText || payloadText === "[DONE]") continue;
-
-          let piece = payloadText;
-          let pieceType: "content" | "reasoning" = "content";
-          try {
-            const parsed = JSON.parse(payloadText) as { token?: string; type?: "content" | "reasoning" };
-            if (typeof parsed.token === "string") {
-              piece = parsed.token;
-            }
-            if (parsed.type === "reasoning" || parsed.type === "content") {
-              pieceType = parsed.type;
-            }
-          } catch {
-            // Backward-compatible fallback for plain `data: token` payloads.
-          }
-
-          if (!piece) continue;
-
-          setMessages((current) => {
-            const updated = [...current];
-            const last = updated.at(-1);
-            if (!last || last.role !== "assistant") {
-              updated.push({
-                role: "assistant",
-                content: pieceType === "content" ? piece : "",
-                reasoning: pieceType === "reasoning" ? piece : "",
-                reasoningStreaming: pieceType === "reasoning",
-                reasoningCollapsed: false,
-              });
-              return updated;
-            }
-            if (pieceType === "reasoning") {
-              updated[updated.length - 1] = {
-                ...last,
-                reasoning: `${last.reasoning ?? ""}${piece}`,
-                reasoningStreaming: true,
-                reasoningCollapsed: false,
-              };
-            } else {
-              updated[updated.length - 1] = { ...last, content: `${last.content}${piece}` };
-            }
-            return updated;
-          });
-        }
-
-        if (done) break;
-      }
-
-      setMessages((current) => {
-        const updated = [...current];
-        const last = updated.at(-1);
-        if (!last || last.role !== "assistant") {
-          return updated;
-        }
-
-        const hasReasoning = Boolean(last.reasoning?.trim());
-        updated[updated.length - 1] = {
-          ...last,
-          reasoningStreaming: false,
-          reasoningCollapsed: hasReasoning,
-        };
-        return updated;
-      });
+      await consumeAssistantStream(res);
 
     } catch (error) {
-      const timeoutMessage = error instanceof DOMException && error.name === "AbortError"
-        ? "请求超时，已自动停止。请重试，或减少上下文/图片数量后再发送。"
-        : "请求失败，请稍后重试。";
-      setMessages([...next, { role: "assistant", content: timeoutMessage }]);
+      const isAbort = error instanceof DOMException && error.name === "AbortError";
+      if (isAbort && stopRequestedRef.current) {
+        setMessages(next);
+        setModelHint("已停止生成。已保留本次提问，并移除未完成的回答。");
+      } else {
+        const timeoutMessage = isAbort && timeoutRequestedRef.current
+          ? "请求超时，已自动停止。请重试，或减少上下文/图片数量后再发送。"
+          : "请求失败，请稍后重试。";
+        setMessages([...next, { role: "assistant", content: timeoutMessage }]);
+      }
     } finally {
       window.clearTimeout(timeoutId);
+      if (streamControllerRef.current === controller) {
+        streamControllerRef.current = null;
+      }
+      stopRequestedRef.current = false;
+      timeoutRequestedRef.current = false;
       setLoading(false);
       await loadSessions(sessionId, { keepCurrentMessages: true });
+    }
+  }
+
+  async function regenerateLastAnswer() {
+    if (loading || !activeSessionId) return;
+    const last = messages.at(-1);
+    if (!last || last.role !== "assistant") return;
+
+    const baseMessages = messages.slice(0, -1);
+    const lastUser = [...baseMessages].reverse().find((item) => item.role === "user");
+    if (!lastUser) return;
+
+    setLoading(true);
+    setModelHint("");
+    setMessages([
+      ...baseMessages,
+      {
+        role: "assistant",
+        content: "",
+        reasoning: "",
+        reasoningStreaming: thinkingEnabled,
+        reasoningCollapsed: false,
+      },
+    ]);
+
+    const controller = new AbortController();
+    streamControllerRef.current = controller;
+    stopRequestedRef.current = false;
+    timeoutRequestedRef.current = false;
+    const timeoutId = window.setTimeout(() => {
+      timeoutRequestedRef.current = true;
+      controller.abort();
+    }, STREAM_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions/${activeSessionId}/regenerate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model,
+          enable_thinking: thinkingEnabled,
+        })
+      });
+
+      await consumeAssistantStream(res);
+    } catch (error) {
+      const isAbort = error instanceof DOMException && error.name === "AbortError";
+      if (isAbort && stopRequestedRef.current) {
+        setMessages(baseMessages);
+        setModelHint("已停止重新生成。已保留上一条提问，并移除未完成的回答。");
+      } else {
+        const timeoutMessage = isAbort && timeoutRequestedRef.current
+          ? "请求超时，已自动停止。请重试，或减少上下文/图片数量后再发送。"
+          : "重新生成失败，请稍后重试。";
+        setMessages([...baseMessages, { role: "assistant", content: timeoutMessage }]);
+      }
+    } finally {
+      window.clearTimeout(timeoutId);
+      if (streamControllerRef.current === controller) {
+        streamControllerRef.current = null;
+      }
+      stopRequestedRef.current = false;
+      timeoutRequestedRef.current = false;
+      setLoading(false);
+      await loadSessions(activeSessionId, { keepCurrentMessages: true });
     }
   }
 
@@ -733,6 +853,17 @@ export default function Page() {
                       }
                       : undefined
                   )}
+                  {msg.role === "assistant" && idx === messages.length - 1 && !loading ? (
+                    <div className="message-actions">
+                      <button
+                        type="button"
+                        className="message-action-button"
+                        onClick={regenerateLastAnswer}
+                      >
+                        重新生成
+                      </button>
+                    </div>
+                  ) : null}
                 </article>
               ))
             )}
@@ -746,7 +877,7 @@ export default function Page() {
                   ref={uploadInputRef}
                   type="file"
                   multiple
-                  accept="image/*,.txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.html,.htm,.url,.webloc,.web"
+                  accept="image/*,.heic,.heif,.txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.html,.htm,.url,.webloc,.web"
                   hidden
                   onChange={async (e) => {
                     const input = e.currentTarget;
@@ -849,12 +980,22 @@ export default function Page() {
                 rows={3}
               />
             </div>
-            <button
-              disabled={!canSend}
-              className="send-button"
-            >
-              {loading ? "生成中" : "发送"}
-            </button>
+            {loading ? (
+              <button
+                type="button"
+                className="stop-button"
+                onClick={stopGeneration}
+              >
+                停止
+              </button>
+            ) : (
+              <button
+                disabled={!canSend}
+                className="send-button"
+              >
+                发送
+              </button>
+            )}
           </form>
         </div>
       </div>

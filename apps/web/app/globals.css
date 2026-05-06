@@ -225,7 +225,8 @@ select {
 .ghost-button,
 .model-select,
 .composer-input,
-.send-button {
+.send-button,
+.stop-button {
   border-radius: 14px;
 }
 
@@ -407,6 +408,27 @@ select {
 .message-assistant {
   justify-self: start;
   background: rgba(255, 255, 255, 0.95);
+}
+
+.message-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+
+.message-action-button {
+  border: 1px solid color-mix(in srgb, var(--line) 84%, #ffffff 16%);
+  border-radius: 10px;
+  background: #ffffff;
+  color: #5f628f;
+  font-size: 12px;
+  line-height: 1;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.message-action-button:hover {
+  background: #f3f5ff;
 }
 
 .markdown-body > :first-child {
@@ -671,18 +693,32 @@ select {
   background: white;
 }
 
-.send-button {
+.send-button,
+.stop-button {
   min-width: 120px;
   border: none;
   padding: 0 18px;
+  cursor: pointer;
+}
+
+.send-button {
   background: linear-gradient(145deg, #ff7eb8, #ff5aa3);
   color: white;
-  cursor: pointer;
 }
 
 .send-button:disabled {
   background: #d3c8dc;
   cursor: not-allowed;
+}
+
+.stop-button {
+  background: #ffffff;
+  color: #b93563;
+  border: 1px solid #ffadc9;
+}
+
+.stop-button:hover {
+  background: #fff0f6;
 }
 
 @media (max-width: 768px) {
@@ -737,7 +773,8 @@ select {
     grid-template-columns: 1fr;
   }
 
-  .send-button {
+  .send-button,
+  .stop-button {
     min-height: 48px;
   }
 }
