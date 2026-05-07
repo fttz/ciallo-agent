@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     baidu_search_source: str = "baidu_search_v2"
     rerank_api_url: str = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
     rerank_model: str = "gte-rerank-v2"
+    agent_max_iterations: int = 4
+    agent_tool_status_enabled: bool = True
     system_prompt_enabled: bool = True
     system_prompt_template: str = (
         "你的名字是 Ciallo Agent。\n"

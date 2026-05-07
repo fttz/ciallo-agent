@@ -5,12 +5,12 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from .agent_runtime import stream_agent_completion
 from .config import settings
 from .file_parser import parse_uploaded_file, save_upload_file
-from .model_gateway import list_models, stream_chat_completion
+from .model_gateway import list_models
 from .schemas import ChatMessage, ChatRequest, ParsedFile, RegenerateRequest, SessionCreateRequest, SessionItem, SessionUpdateRequest, UserSettings
 from .session_store import SessionStore
-from .web_search import build_web_search_context
 
 app = FastAPI(title=settings.app_name)
 
@@ -83,32 +83,10 @@ def update_settings(payload: UserSettings) -> UserSettings:
 async def chat_stream(payload: ChatRequest) -> StreamingResponse:
     stored_history = SESSION_STORE.get_messages(payload.session_id) if payload.session_id else []
     merged_messages = [*stored_history, *payload.messages]
-    web_search_outcome = await build_web_search_context(merged_messages)
-    messages_for_model = merged_messages
-
-    if web_search_outcome.used and web_search_outcome.context:
-        messages_for_model = []
-        injected = False
-        for index, message in enumerate(merged_messages):
-            is_last_user = index == len(merged_messages) - 1 and message.role == "user"
-            if is_last_user:
-                messages_for_model.append(
-                    ChatMessage(
-                        role=message.role,
-                        content=f"{message.content}\n\n{web_search_outcome.context}",
-                        images=message.images,
-                        documents=message.documents,
-                    )
-                )
-                injected = True
-            else:
-                messages_for_model.append(message)
-        if not injected:
-            messages_for_model = merged_messages
 
     request_payload = ChatRequest(
         model=payload.model,
-        messages=messages_for_model,
+        messages=merged_messages,
         images=payload.images,
         enable_thinking=payload.enable_thinking,
     )
@@ -126,7 +104,7 @@ async def chat_stream(payload: ChatRequest) -> StreamingResponse:
 
     async def event_stream() -> AsyncGenerator[str, None]:
         assistant_parts: list[str] = []
-        async for chunk in stream_chat_completion(request_payload):
+        async for chunk in stream_agent_completion(request_payload):
             token = chunk.get("text", "")
             token_type = chunk.get("type", "content")
             if not token:
@@ -161,34 +139,15 @@ async def regenerate_last_answer(session_id: str, payload: RegenerateRequest) ->
     if not stored_history or stored_history[-1].role != "user":
         raise HTTPException(status_code=400, detail="no user message to regenerate")
 
-    web_search_outcome = await build_web_search_context(stored_history)
-    messages_for_model = stored_history
-
-    if web_search_outcome.used and web_search_outcome.context:
-        messages_for_model = []
-        for index, message in enumerate(stored_history):
-            is_last_user = index == len(stored_history) - 1 and message.role == "user"
-            if is_last_user:
-                messages_for_model.append(
-                    ChatMessage(
-                        role=message.role,
-                        content=f"{message.content}\n\n{web_search_outcome.context}",
-                        images=message.images,
-                        documents=message.documents,
-                    )
-                )
-            else:
-                messages_for_model.append(message)
-
     request_payload = ChatRequest(
         model=payload.model,
-        messages=messages_for_model,
+        messages=stored_history,
         enable_thinking=payload.enable_thinking,
     )
 
     async def event_stream() -> AsyncGenerator[str, None]:
         assistant_parts: list[str] = []
-        async for chunk in stream_chat_completion(request_payload):
+        async for chunk in stream_agent_completion(request_payload):
             token = chunk.get("text", "")
             token_type = chunk.get("type", "content")
             if not token:

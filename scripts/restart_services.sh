@@ -101,15 +101,15 @@ kill_port "$FRONTEND_PORT"
 
 echo "Starting backend on $BACKEND_HOST:$BACKEND_PORT..."
 if [[ -x "$VENV_PYTHON" ]]; then
-  nohup bash -lc "cd '$ROOT_DIR/apps/api' && '$VENV_PYTHON' -m uvicorn app.main:app --host '$BACKEND_HOST' --port '$BACKEND_PORT'" >"$BACKEND_LOG" 2>&1 &
+  nohup python3 -c "import os; os.chdir('$ROOT_DIR/apps/api'); os.setsid(); os.execv('$VENV_PYTHON', ['python', '-m', 'uvicorn', 'app.main:app', '--host', '$BACKEND_HOST', '--port', '$BACKEND_PORT'])" >"$BACKEND_LOG" 2>&1 < /dev/null &
 else
-  nohup uv run --directory "$ROOT_DIR/apps/api" uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" >"$BACKEND_LOG" 2>&1 &
+  nohup python3 -c "import os; os.chdir('$ROOT_DIR'); os.setsid(); os.execvp('uv', ['uv', 'run', '--directory', '$ROOT_DIR/apps/api', 'uvicorn', 'app.main:app', '--host', '$BACKEND_HOST', '--port', '$BACKEND_PORT'])" >"$BACKEND_LOG" 2>&1 < /dev/null &
 fi
 BACKEND_PID=$!
 echo "$BACKEND_PID" > "$BACKEND_PID_FILE"
 
 echo "Starting frontend on $FRONTEND_HOST:$FRONTEND_PORT..."
-nohup bash -lc "cd '$ROOT_DIR/apps/web' && npm run dev -- --hostname '$FRONTEND_HOST' --port '$FRONTEND_PORT'" >"$FRONTEND_LOG" 2>&1 &
+nohup python3 -c "import os; os.chdir('$ROOT_DIR/apps/web'); os.setsid(); os.execv('$ROOT_DIR/node_modules/.bin/next', ['next', 'dev', '--hostname', '$FRONTEND_HOST', '--port', '$FRONTEND_PORT'])" >"$FRONTEND_LOG" 2>&1 < /dev/null &
 FRONTEND_PID=$!
 echo "$FRONTEND_PID" > "$FRONTEND_PID_FILE"
 

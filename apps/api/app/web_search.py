@@ -25,6 +25,7 @@ class WebSearchOutcome:
     query: str = ""
     context: str = ""
     sources: list[WebSource] | None = None
+    reason: str = ""
 
 
 def _last_user_message(messages: list[ChatMessage]) -> str:
@@ -228,6 +229,25 @@ async def _baidu_search(query: str, recency: str | None) -> list[WebSource]:
     return items
 
 
+def _format_tool_result(query: str, items: list[WebSource]) -> str:
+    if not items:
+        return f"query: {query}\nresult_count: 0\nsources: []"
+
+    lines = [f"query: {query}", f"result_count: {len(items)}", "sources:"]
+    for index, item in enumerate(items, start=1):
+        excerpt = (item.cleaned or item.snippet or "").strip()
+        excerpt = re.sub(r"\s+", " ", excerpt)[:600]
+        lines.extend(
+            [
+                f"{index}. title: {item.title}",
+                f"   url: {item.url}",
+                f"   score: {item.score:.3f}",
+                f"   excerpt: {excerpt}",
+            ]
+        )
+    return "\n".join(lines)
+
+
 async def _rerank(query: str, items: list[WebSource]) -> list[WebSource]:
     if not items:
         return items
@@ -312,9 +332,17 @@ async def build_web_search_context(messages: list[ChatMessage]) -> WebSearchOutc
     if not need_search or not query:
         return WebSearchOutcome(used=False)
 
+    final_items = await search_web(query, recency)
+    if not final_items:
+        return WebSearchOutcome(used=False, query=query)
+    context = _build_web_context(query, final_items)
+    return WebSearchOutcome(used=True, query=query, context=context, sources=final_items, reason="planner")
+
+
+async def search_web(query: str, recency: str | None = None) -> list[WebSource]:
     items = await _baidu_search(query, recency)
     if not items:
-        return WebSearchOutcome(used=False, query=query)
+        return []
 
     fetch_top_k = max(1, min(settings.web_search_fetch_top_k, len(items)))
     async with httpx.AsyncClient(timeout=settings.web_search_fetch_timeout_sec) as client:
@@ -323,6 +351,25 @@ async def build_web_search_context(messages: list[ChatMessage]) -> WebSearchOutc
     merged = fetched_items + items[fetch_top_k:]
     ranked = await _rerank(query, merged)
     top_n = max(1, min(settings.web_search_rerank_top_n, len(ranked)))
-    final_items = ranked[:top_n]
-    context = _build_web_context(query, final_items)
-    return WebSearchOutcome(used=True, query=query, context=context, sources=final_items)
+    return ranked[:top_n]
+
+
+async def run_web_search_tool(query: str, recency: str | None = None) -> str:
+    cleaned_query = query.strip()
+    if not cleaned_query:
+        return "query: \nresult_count: 0\nsources: []"
+
+    if not settings.web_search_enabled:
+        return "query: \nresult_count: 0\nerror: web_search_disabled\nsources: []"
+
+    if not settings.baidu_search_api_key.strip():
+        return (
+            f"query: {cleaned_query}\n"
+            "result_count: 0\n"
+            "error: missing_baidu_search_api_key\n"
+            "message: BAIDU_SEARCH_API_KEY 未配置，当前无法执行联网搜索。\n"
+            "sources: []"
+        )
+
+    items = await search_web(cleaned_query, recency)
+    return _format_tool_result(cleaned_query, items)
