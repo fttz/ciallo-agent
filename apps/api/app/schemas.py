@@ -12,11 +12,21 @@ class ChatDocument(BaseModel):
     kind: str = "text"
 
 
+class ChatToolCall(BaseModel):
+    id: str
+    name: str
+    input: str = ""
+    output: str = ""
+    status: str = "done"
+    collapsed: bool = True
+
+
 class ChatMessage(BaseModel):
     role: str = Field(pattern="^(user|assistant|system)$")
     content: str
     images: list[ChatImage] = []
     documents: list[ChatDocument] = []
+    toolCalls: list[ChatToolCall] = []
 
 
 class ChatRequest(BaseModel):
@@ -51,6 +61,14 @@ class ParsedFile(BaseModel):
     size: int
     kind: str
     content: str
+
+
+class ModelApiKeyStatus(BaseModel):
+    configured: bool
+
+
+class ModelApiKeyUpdate(BaseModel):
+    api_key: str
 
 
 class UserSettings(BaseModel):

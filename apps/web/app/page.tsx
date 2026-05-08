@@ -11,12 +11,22 @@ type ModelInfo = {
   is_default?: boolean;
 };
 
+type ToolCall = {
+  id: string;
+  name: string;
+  input: string;
+  output: string;
+  status: "running" | "done";
+  collapsed: boolean;
+};
+
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   reasoning?: string;
   reasoningStreaming?: boolean;
   reasoningCollapsed?: boolean;
+  toolCalls?: ToolCall[];
   images?: Array<{
     name: string;
     data_url: string;
@@ -47,6 +57,15 @@ type SessionItem = {
   updated_at: string;
 };
 
+type StreamPayload = {
+  token?: string;
+  type?: "content" | "reasoning" | "tool_start" | "tool_end";
+  tool_call_id?: string;
+  name?: string;
+  input?: string;
+  output?: string;
+};
+
 const API_BASE = "/backend";
 const MAX_IMAGE_DIMENSION = 1440;
 const IMAGE_REENCODE_THRESHOLD = 1.2 * 1024 * 1024;
@@ -61,7 +80,46 @@ const defaultModels: ModelInfo[] = [
   { id: "qwen-vl-max-latest", name: "Qwen VL Max Latest", capabilities: ["text", "vision"] }
 ];
 
-function renderMessageContent(message: ChatMessage, onToggleReasoning?: () => void) {
+function renderToolCalls(message: ChatMessage, onToggleTool?: (toolId: string) => void) {
+  if (!message.toolCalls?.length) return null;
+
+  return (
+    <div className="tool-call-stack">
+      {message.toolCalls.map((tool, index) => (
+        <section key={tool.id} className={tool.status === "running" ? "tool-call-card tool-call-running" : "tool-call-card"}>
+          <button
+            type="button"
+            className="tool-call-header"
+            onClick={() => onToggleTool?.(tool.id)}
+            aria-expanded={!tool.collapsed}
+          >
+            <span className="tool-call-chevron">{tool.collapsed ? ">" : "v"}</span>
+            <span className="tool-call-name">{tool.name}</span>
+            <span className="tool-call-summary">
+              {tool.status === "running" ? "调用中" : "已完成"} #{index + 1}
+            </span>
+          </button>
+          {!tool.collapsed ? (
+            <div className="tool-call-body">
+              {tool.input ? (
+                <div className="tool-call-section">
+                  <div className="tool-call-label">调用参数</div>
+                  <pre className="tool-call-pre">{tool.input}</pre>
+                </div>
+              ) : null}
+              <div className="tool-call-section">
+                <div className="tool-call-label">返回结果</div>
+                <pre className="tool-call-pre">{tool.output || (tool.status === "running" ? "等待工具返回..." : "无返回内容")}</pre>
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function renderMessageContent(message: ChatMessage, onToggleReasoning?: () => void, onToggleTool?: (toolId: string) => void) {
   if (message.role === "assistant") {
     const hasReasoning = Boolean(message.reasoning?.trim());
     const isStreamingReasoning = Boolean(message.reasoningStreaming);
@@ -69,6 +127,7 @@ function renderMessageContent(message: ChatMessage, onToggleReasoning?: () => vo
 
     return (
       <>
+        {renderToolCalls(message, onToggleTool)}
         {hasReasoning ? (
           <div className="reasoning-section">
             <button
@@ -117,11 +176,17 @@ export default function Page() {
   const [modelHint, setModelHint] = useState("");
   const [menuSessionId, setMenuSessionId] = useState("");
   const [booting, setBooting] = useState(true);
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(true);
+  const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [apiKeySaving, setApiKeySaving] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState("");
   const initializedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const composerFormRef = useRef<HTMLFormElement | null>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
+  const composingRef = useRef(false);
   const stopRequestedRef = useRef(false);
   const timeoutRequestedRef = useRef(false);
 
@@ -137,6 +202,7 @@ export default function Page() {
     (async () => {
       try {
         await loadModels();
+        await loadApiKeyStatus();
         await loadSessions();
       } finally {
         setBooting(false);
@@ -160,6 +226,40 @@ export default function Page() {
     return () => window.removeEventListener("click", onWindowClick);
   }, []);
 
+  useEffect(() => {
+    if (!activeSessionId || loading) return;
+
+    let stopped = false;
+    let intervalId: number | undefined;
+
+    async function checkActiveRun() {
+      try {
+        const res = await fetch(`${API_BASE}/api/sessions/${activeSessionId}/active-run`);
+        if (!res.ok) return;
+        const data: { running?: boolean } = await res.json();
+        if (stopped) return;
+        if (data.running) {
+          await openSession(activeSessionId);
+          intervalId = window.setTimeout(checkActiveRun, 2000);
+          return;
+        }
+        if (intervalId) {
+          await openSession(activeSessionId);
+        }
+      } catch {
+        // Keep the current view if the background status check is unavailable.
+      }
+    }
+
+    void checkActiveRun();
+    return () => {
+      stopped = true;
+      if (intervalId) {
+        window.clearTimeout(intervalId);
+      }
+    };
+  }, [activeSessionId, loading]);
+
   async function loadModels() {
     try {
       const res = await fetch(`${API_BASE}/api/models`);
@@ -172,6 +272,49 @@ export default function Page() {
       }
     } catch {
       // keep defaults on network failure
+    }
+  }
+
+  async function loadApiKeyStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/api/model-api-key/status`);
+      if (!res.ok) return;
+      const data: { configured?: boolean } = await res.json();
+      const configured = Boolean(data.configured);
+      setApiKeyConfigured(configured);
+      setApiKeyModalOpen(!configured);
+    } catch {
+      // The chat request will surface backend availability errors if the API is unreachable.
+    }
+  }
+
+  async function saveApiKey(e?: FormEvent) {
+    e?.preventDefault();
+    const value = apiKeyInput.trim();
+    if (!value) {
+      setApiKeyError("请输入 MODEL_API_KEY。");
+      return;
+    }
+
+    setApiKeySaving(true);
+    setApiKeyError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/model-api-key`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: value })
+      });
+      if (!res.ok) {
+        throw new Error("api key update failed");
+      }
+      setApiKeyConfigured(true);
+      setApiKeyModalOpen(false);
+      setApiKeyInput("");
+      setModelHint("MODEL_API_KEY 已写入当前后端进程，本次运行可以开始对话。");
+    } catch {
+      setApiKeyError("保存失败，请确认后端服务正常运行后重试。");
+    } finally {
+      setApiKeySaving(false);
     }
   }
 
@@ -457,10 +600,68 @@ export default function Page() {
     return model;
   }
 
-  function stopGeneration() {
+  async function stopGeneration() {
     if (!streamControllerRef.current) return;
     stopRequestedRef.current = true;
+    if (activeSessionId) {
+      try {
+        await fetch(`${API_BASE}/api/sessions/${activeSessionId}/active-run`, { method: "DELETE" });
+      } catch {
+        // The local abort below still stops the visible stream if cancellation fails.
+      }
+    }
     streamControllerRef.current.abort();
+  }
+
+  function appendOrUpdateToolCall(message: ChatMessage, payload: StreamPayload): ChatMessage {
+    const toolId = payload.tool_call_id || `${payload.name || "tool"}-${Date.now()}`;
+    const toolName = payload.name || "tool";
+    const currentTools = message.toolCalls ?? [];
+    const existingIndex = currentTools.findIndex((item) => item.id === toolId);
+
+    if (payload.type === "tool_start") {
+      const nextTool: ToolCall = {
+        id: toolId,
+        name: toolName,
+        input: payload.input || payload.token || "",
+        output: "",
+        status: "running",
+        collapsed: true,
+      };
+      if (existingIndex >= 0) {
+        const updatedTools = [...currentTools];
+        updatedTools[existingIndex] = { ...updatedTools[existingIndex], ...nextTool };
+        return { ...message, toolCalls: updatedTools };
+      }
+      return { ...message, toolCalls: [...currentTools, nextTool] };
+    }
+
+    const nextOutput = payload.output || payload.token || "";
+    if (existingIndex >= 0) {
+      const updatedTools = [...currentTools];
+      updatedTools[existingIndex] = {
+        ...updatedTools[existingIndex],
+        name: toolName,
+        output: nextOutput,
+        status: "done",
+      };
+      return { ...message, toolCalls: updatedTools };
+    }
+
+    return {
+      ...message,
+      toolCalls: [
+        ...currentTools,
+        {
+          id: toolId,
+          name: toolName,
+          input: payload.input || "",
+          output: nextOutput,
+          status: "done",
+          collapsed: true,
+        },
+      ],
+    };
   }
 
   async function consumeAssistantStream(res: Response) {
@@ -494,20 +695,15 @@ export default function Page() {
         const payloadText = payloadLines.join("\n");
         if (!payloadText || payloadText === "[DONE]") continue;
 
-        let piece = payloadText;
-        let pieceType: "content" | "reasoning" = "content";
+        let payload: StreamPayload = { token: payloadText, type: "content" };
         try {
-          const parsed = JSON.parse(payloadText) as { token?: string; type?: "content" | "reasoning" };
-          if (typeof parsed.token === "string") {
-            piece = parsed.token;
-          }
-          if (parsed.type === "reasoning" || parsed.type === "content") {
-            pieceType = parsed.type;
-          }
+          payload = JSON.parse(payloadText) as StreamPayload;
         } catch {
           // Backward-compatible fallback for plain `data: token` payloads.
         }
 
+        const piece = typeof payload.token === "string" ? payload.token : "";
+        const pieceType = payload.type || "content";
         if (!piece) continue;
 
         setMessages((current) => {
@@ -520,6 +716,9 @@ export default function Page() {
               reasoning: pieceType === "reasoning" ? piece : "",
               reasoningStreaming: pieceType === "reasoning",
               reasoningCollapsed: false,
+              toolCalls: pieceType === "tool_start" || pieceType === "tool_end"
+                ? appendOrUpdateToolCall({ role: "assistant", content: "" }, payload).toolCalls
+                : undefined,
             });
             return updated;
           }
@@ -530,6 +729,8 @@ export default function Page() {
               reasoningStreaming: true,
               reasoningCollapsed: false,
             };
+          } else if (pieceType === "tool_start" || pieceType === "tool_end") {
+            updated[updated.length - 1] = appendOrUpdateToolCall(last, payload);
           } else {
             updated[updated.length - 1] = { ...last, content: `${last.content}${piece}` };
           }
@@ -560,6 +761,12 @@ export default function Page() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!canSend) return;
+
+    if (!apiKeyConfigured) {
+      setApiKeyModalOpen(true);
+      setApiKeyError("请先填写 MODEL_API_KEY，再发送消息。");
+      return;
+    }
 
     let sessionId = activeSessionId;
     if (!sessionId) {
@@ -710,6 +917,47 @@ export default function Page() {
 
   return (
     <main className="app-shell">
+      {apiKeyModalOpen ? (
+        <div className="api-key-modal-backdrop" role="presentation">
+          <form className="api-key-modal" onSubmit={saveApiKey}>
+            <div>
+              <div className="api-key-modal-title">需要配置 MODEL_API_KEY</div>
+              <p className="api-key-modal-copy">
+                当前后端还没有可用的模型 API Key。填写后会写入当前运行中的后端进程，刷新页面不会丢失，重启服务后建议改用 .env 持久配置。
+              </p>
+            </div>
+            <label className="api-key-field">
+              <span>MODEL_API_KEY</span>
+              <input
+                value={apiKeyInput}
+                onChange={(event) => {
+                  setApiKeyInput(event.target.value);
+                  setApiKeyError("");
+                }}
+                className="api-key-input"
+                type="password"
+                autoComplete="off"
+                autoFocus
+                placeholder="sk-..."
+              />
+            </label>
+            {apiKeyError ? <div className="api-key-error">{apiKeyError}</div> : null}
+            <div className="api-key-actions">
+              <button
+                type="button"
+                className="api-key-secondary-button"
+                onClick={() => setApiKeyModalOpen(false)}
+                disabled={!apiKeyConfigured || apiKeySaving}
+              >
+                稍后填写
+              </button>
+              <button type="submit" className="api-key-primary-button" disabled={apiKeySaving}>
+                {apiKeySaving ? "保存中..." : "保存并开始"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
       <div className="workspace-grid">
         <aside className="history-panel">
           <header className="history-header">
@@ -851,6 +1099,24 @@ export default function Page() {
                           return updated;
                         });
                       }
+                      : undefined,
+                    msg.role === "assistant"
+                      ? (toolId) => {
+                        setMessages((current) => {
+                          const updated = [...current];
+                          const target = updated[idx];
+                          if (!target || target.role !== "assistant") {
+                            return updated;
+                          }
+                          updated[idx] = {
+                            ...target,
+                            toolCalls: (target.toolCalls ?? []).map((tool) =>
+                              tool.id === toolId ? { ...tool, collapsed: !tool.collapsed } : tool
+                            ),
+                          };
+                          return updated;
+                        });
+                      }
                       : undefined
                   )}
                   {msg.role === "assistant" && idx === messages.length - 1 && !loading ? (
@@ -955,7 +1221,17 @@ export default function Page() {
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onCompositionStart={() => {
+                  composingRef.current = true;
+                }}
+                onCompositionEnd={() => {
+                  composingRef.current = false;
+                }}
                 onKeyDown={(e) => {
+                  const nativeEvent = e.nativeEvent as KeyboardEvent;
+                  if (composingRef.current || nativeEvent.isComposing) {
+                    return;
+                  }
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     if (canSend && !loading) {

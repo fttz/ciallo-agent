@@ -4,7 +4,7 @@ from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
-from .schemas import ChatDocument, ChatImage, ChatMessage, SessionItem
+from .schemas import ChatDocument, ChatImage, ChatMessage, ChatToolCall, SessionItem
 
 
 class SessionStore:
@@ -118,7 +118,25 @@ class SessionStore:
                         if isinstance(name, str) and isinstance(doc_content, str):
                             documents.append(ChatDocument(name=name, content=doc_content, kind=str(kind or "text")))
 
-                    messages.append(ChatMessage(role=role, content=content, images=images, documents=documents))
+                    tool_calls: list[ChatToolCall] = []
+                    for tool_call in message.get("toolCalls", []):
+                        if not isinstance(tool_call, dict):
+                            continue
+                        tool_id = tool_call.get("id")
+                        name = tool_call.get("name")
+                        if isinstance(tool_id, str) and isinstance(name, str):
+                            tool_calls.append(
+                                ChatToolCall(
+                                    id=tool_id,
+                                    name=name,
+                                    input=str(tool_call.get("input") or ""),
+                                    output=str(tool_call.get("output") or ""),
+                                    status=str(tool_call.get("status") or "done"),
+                                    collapsed=bool(tool_call.get("collapsed", True)),
+                                )
+                            )
+
+                    messages.append(ChatMessage(role=role, content=content, images=images, documents=documents, toolCalls=tool_calls))
             return messages
 
     def append_message(
@@ -128,6 +146,7 @@ class SessionStore:
         content: str,
         images: list[ChatImage] | None = None,
         documents: list[ChatDocument] | None = None,
+        tool_calls: list[ChatToolCall] | None = None,
     ) -> bool:
         text = content.strip()
         serialized_images = [{"name": image.name, "data_url": image.data_url} for image in images or []]
@@ -135,7 +154,18 @@ class SessionStore:
             {"name": document.name, "content": document.content, "kind": document.kind}
             for document in documents or []
         ]
-        if not text and not serialized_images and not serialized_documents:
+        serialized_tool_calls = [
+            {
+                "id": tool_call.id,
+                "name": tool_call.name,
+                "input": tool_call.input,
+                "output": tool_call.output,
+                "status": tool_call.status,
+                "collapsed": tool_call.collapsed,
+            }
+            for tool_call in tool_calls or []
+        ]
+        if not text and not serialized_images and not serialized_documents and not serialized_tool_calls:
             return False
 
         with self._lock:
@@ -150,6 +180,7 @@ class SessionStore:
                     "content": text,
                     "images": serialized_images,
                     "documents": serialized_documents,
+                    "toolCalls": serialized_tool_calls,
                     "created_at": self._now(),
                 }
             )

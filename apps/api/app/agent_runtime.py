@@ -1,3 +1,4 @@
+import json
 from typing import Annotated, Any, AsyncGenerator, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -114,6 +115,20 @@ def _extract_reasoning_segments(chunk: Any) -> list[str]:
     return []
 
 
+def _stringify_tool_payload(value: Any) -> str:
+    if value is None:
+        return ""
+    content = getattr(value, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str, indent=2)
+    except TypeError:
+        return str(value)
+
+
 def _build_model(model: str, enable_thinking: bool) -> ChatOpenAI:
     extra_body: dict[str, Any] = {}
     if enable_thinking:
@@ -151,7 +166,7 @@ def _build_agent_graph(model: str, enable_thinking: bool):
     return graph.compile()
 
 
-async def stream_agent_completion(payload: ChatRequest) -> AsyncGenerator[dict[str, str], None]:
+async def stream_agent_completion(payload: ChatRequest) -> AsyncGenerator[dict[str, Any], None]:
     has_images = len(payload.images) > 0 or any(message.images for message in payload.messages)
     selected_model = resolve_model(payload.model, has_images=has_images)
     thinking_enabled = settings.model_enable_thinking if payload.enable_thinking is None else payload.enable_thinking
@@ -175,16 +190,27 @@ async def stream_agent_completion(payload: ChatRequest) -> AsyncGenerator[dict[s
             event_meta = event.get("metadata", {}) or {}
 
             if event_name == "on_tool_start" and settings.agent_tool_status_enabled:
-                query = event_data.get("input", {}).get("query", "")
+                tool_input = event_data.get("input", {})
+                query = tool_input.get("query", "") if isinstance(tool_input, dict) else ""
                 tool_name = event.get("name", "tool")
-                status = f"[{tool_name}] 正在检索：{query or '未提供检索词'}\n"
-                yield {"type": "reasoning", "text": status}
+                yield {
+                    "type": "tool_start",
+                    "text": query or tool_name,
+                    "tool_call_id": str(event.get("run_id", "")),
+                    "name": tool_name,
+                    "input": _stringify_tool_payload(tool_input),
+                }
                 continue
 
             if event_name == "on_tool_end" and settings.agent_tool_status_enabled:
                 tool_name = event.get("name", "tool")
-                status = f"[{tool_name}] 检索完成，结果已注入上下文。\n"
-                yield {"type": "reasoning", "text": status}
+                yield {
+                    "type": "tool_end",
+                    "text": tool_name,
+                    "tool_call_id": str(event.get("run_id", "")),
+                    "name": tool_name,
+                    "output": _stringify_tool_payload(event_data.get("output")),
+                }
                 continue
 
             if event_name != "on_chat_model_stream":
