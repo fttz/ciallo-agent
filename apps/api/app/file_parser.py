@@ -1,16 +1,23 @@
+import csv
+import json
+from io import StringIO
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
 from fastapi import UploadFile
 from langchain_community.document_loaders import BSHTMLLoader, PyPDFLoader, TextLoader, UnstructuredPowerPointLoader, WebBaseLoader
 from langchain_community.document_loaders.word_document import Docx2txtLoader, UnstructuredWordDocumentLoader
+from openpyxl import load_workbook
 
 
-TEXT_SUFFIXES = {".txt", ".md", ".csv", ".json", ".log"}
+TEXT_SUFFIXES = {".txt", ".md", ".log"}
 HTML_SUFFIXES = {".html", ".htm"}
 WORD_SUFFIXES = {".doc", ".docx"}
 PPT_SUFFIXES = {".ppt", ".pptx"}
+SPREADSHEET_SUFFIXES = {".xlsx"}
 WEB_LINK_SUFFIXES = {".url", ".webloc", ".web"}
+TABLE_MAX_ROWS = 120
+TABLE_MAX_COLUMNS = 20
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -42,6 +49,67 @@ def _normalize_documents(documents: list, max_chars: int) -> str:
     if not merged:
         return "文件解析完成，但未提取到可用文本内容。"
     return _truncate(merged, max_chars)
+
+
+def _format_cell(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).replace("\n", " ").replace("|", "\\|").strip()
+    return text
+
+
+def _format_table(rows: list[list[object]], max_chars: int) -> str:
+    trimmed_rows = [row[:TABLE_MAX_COLUMNS] for row in rows[:TABLE_MAX_ROWS] if any(cell is not None and str(cell).strip() for cell in row)]
+    if not trimmed_rows:
+        return "文件解析完成，但未提取到可用表格内容。"
+
+    width = max(len(row) for row in trimmed_rows)
+    normalized = [row + [""] * (width - len(row)) for row in trimmed_rows]
+    header = [_format_cell(cell) or f"列{index + 1}" for index, cell in enumerate(normalized[0])]
+    body = normalized[1:] if len(normalized) > 1 else []
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join("---" for _ in header) + " |",
+    ]
+    for row in body:
+        lines.append("| " + " | ".join(_format_cell(cell) for cell in row) + " |")
+    if len(rows) > TABLE_MAX_ROWS:
+        lines.append(f"\n[...表格超过 {TABLE_MAX_ROWS} 行，已截断...]")
+    return _truncate("\n".join(lines), max_chars)
+
+
+async def _parse_csv_upload(file: UploadFile, max_chars: int) -> str:
+    raw_text = await _read_upload_text(file)
+    sample = raw_text[:2048]
+    try:
+        dialect = csv.Sniffer().sniff(sample)
+    except csv.Error:
+        dialect = csv.excel
+    rows = list(csv.reader(StringIO(raw_text), dialect))
+    return _format_table(rows, max_chars)
+
+
+async def _parse_json_upload(file: UploadFile, max_chars: int) -> str:
+    raw_text = await _read_upload_text(file)
+    parsed = json.loads(raw_text)
+    return _truncate(json.dumps(parsed, ensure_ascii=False, indent=2), max_chars)
+
+
+def _parse_xlsx_file(path: Path, max_chars: int) -> str:
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    sections: list[str] = []
+    try:
+        for sheet in workbook.worksheets:
+            rows = [list(row) for row in sheet.iter_rows(values_only=True)]
+            if not rows:
+                continue
+            sections.append(f"## Sheet: {sheet.title}\n\n{_format_table(rows, max_chars)}")
+    finally:
+        workbook.close()
+
+    if not sections:
+        return "文件解析完成，但未提取到可用表格内容。"
+    return _truncate("\n\n".join(sections), max_chars)
 
 
 def _extract_url_from_text(raw_text: str) -> str:
@@ -94,6 +162,33 @@ async def parse_uploaded_file(upload_dir: str, file: UploadFile, max_chars: int,
         if suffix in TEXT_SUFFIXES:
             loader = TextLoader(str(path), encoding="utf-8", autodetect_encoding=True)
             kind = "text"
+        elif suffix == ".csv":
+            kind = "sheet"
+            content = await _parse_csv_upload(file, max_chars)
+            return {
+                "filename": saved["filename"],
+                "size": saved["size"],
+                "kind": kind,
+                "content": content,
+            }
+        elif suffix == ".json":
+            kind = "json"
+            content = await _parse_json_upload(file, max_chars)
+            return {
+                "filename": saved["filename"],
+                "size": saved["size"],
+                "kind": kind,
+                "content": content,
+            }
+        elif suffix in SPREADSHEET_SUFFIXES:
+            kind = "sheet"
+            content = _parse_xlsx_file(path, max_chars)
+            return {
+                "filename": saved["filename"],
+                "size": saved["size"],
+                "kind": kind,
+                "content": content,
+            }
         elif suffix == ".pdf":
             loader = PyPDFLoader(str(path))
             kind = "pdf"

@@ -8,10 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .agent_runtime import stream_agent_completion
-from .config import settings
+from .config import ROOT_ENV_PATH, settings
 from .file_parser import parse_uploaded_file, save_upload_file
 from .model_gateway import list_models
-from .schemas import ChatMessage, ChatRequest, ChatToolCall, ModelApiKeyStatus, ModelApiKeyUpdate, ParsedFile, RegenerateRequest, SessionCreateRequest, SessionItem, SessionUpdateRequest, UserSettings
+from .schemas import AppConfig, AppConfigUpdate, ChatMessage, ChatRequest, ChatToolCall, ModelApiKeyStatus, ModelApiKeyUpdate, ParsedFile, RegenerateRequest, SessionCreateRequest, SessionItem, SessionUpdateRequest, UserSettings
 from .session_store import SessionStore
 
 app = FastAPI(title=settings.app_name)
@@ -91,6 +91,39 @@ def update_settings(payload: UserSettings) -> UserSettings:
     return USER_SETTINGS
 
 
+def _env_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _write_env_values(values: dict[str, object]) -> None:
+    ROOT_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lines = ROOT_ENV_PATH.read_text(encoding="utf-8").splitlines() if ROOT_ENV_PATH.exists() else []
+    remaining = set(values)
+    updated_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            updated_lines.append(line)
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in values:
+            updated_lines.append(f"{key}={_env_value(values[key])}")
+            remaining.discard(key)
+        else:
+            updated_lines.append(line)
+
+    if remaining and updated_lines and updated_lines[-1].strip():
+        updated_lines.append("")
+    for key in values:
+        if key in remaining:
+            updated_lines.append(f"{key}={_env_value(values[key])}")
+
+    ROOT_ENV_PATH.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
+
+
 @app.get("/api/model-api-key/status")
 def get_model_api_key_status() -> ModelApiKeyStatus:
     return ModelApiKeyStatus(configured=bool(settings.model_api_key.strip()))
@@ -102,7 +135,96 @@ def update_model_api_key(payload: ModelApiKeyUpdate) -> ModelApiKeyStatus:
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key is required")
     settings.model_api_key = api_key
+    _write_env_values({"MODEL_API_KEY": api_key})
     return ModelApiKeyStatus(configured=True)
+
+
+def _app_config() -> AppConfig:
+    return AppConfig(
+        model_base_url=settings.model_base_url,
+        model_default=settings.model_default,
+        model_vision_default=settings.model_vision_default,
+        model_configs=settings.model_configs,
+        model_enable_thinking=settings.model_enable_thinking,
+        model_api_key_configured=bool(settings.model_api_key.strip()),
+        web_search_enabled=settings.web_search_enabled,
+        web_search_auto_mode=settings.web_search_auto_mode,
+        web_search_top_k=settings.web_search_top_k,
+        web_search_fetch_top_k=settings.web_search_fetch_top_k,
+        web_search_rerank_top_n=settings.web_search_rerank_top_n,
+        web_search_query_planner_model=settings.web_search_query_planner_model,
+        baidu_search_api_url=settings.baidu_search_api_url,
+        baidu_search_source=settings.baidu_search_source,
+        baidu_search_api_key_configured=bool(settings.baidu_search_api_key.strip()),
+        rerank_api_url=settings.rerank_api_url,
+        rerank_model=settings.rerank_model,
+        agent_max_iterations=settings.agent_max_iterations,
+        agent_tool_status_enabled=settings.agent_tool_status_enabled,
+    )
+
+
+@app.get("/api/app-config")
+def get_app_config() -> AppConfig:
+    return _app_config()
+
+
+@app.put("/api/app-config")
+def update_app_config(payload: AppConfigUpdate) -> AppConfig:
+    if payload.web_search_auto_mode not in {"auto", "required", "disabled"}:
+        raise HTTPException(status_code=400, detail="web_search_auto_mode must be auto, required, or disabled")
+    if payload.web_search_top_k < 1 or payload.web_search_fetch_top_k < 1 or payload.web_search_rerank_top_n < 1:
+        raise HTTPException(status_code=400, detail="search limits must be greater than zero")
+    if payload.agent_max_iterations < 1:
+        raise HTTPException(status_code=400, detail="agent_max_iterations must be greater than zero")
+
+    updates: dict[str, object] = {
+        "MODEL_BASE_URL": payload.model_base_url.strip(),
+        "MODEL_DEFAULT": payload.model_default.strip(),
+        "MODEL_VISION_DEFAULT": payload.model_vision_default.strip(),
+        "MODEL_CONFIGS": payload.model_configs.strip(),
+        "MODEL_ENABLE_THINKING": payload.model_enable_thinking,
+        "WEB_SEARCH_ENABLED": payload.web_search_enabled,
+        "WEB_SEARCH_AUTO_MODE": payload.web_search_auto_mode,
+        "WEB_SEARCH_TOP_K": payload.web_search_top_k,
+        "WEB_SEARCH_FETCH_TOP_K": payload.web_search_fetch_top_k,
+        "WEB_SEARCH_RERANK_TOP_N": payload.web_search_rerank_top_n,
+        "WEB_SEARCH_QUERY_PLANNER_MODEL": payload.web_search_query_planner_model.strip(),
+        "BAIDU_SEARCH_API_URL": payload.baidu_search_api_url.strip(),
+        "BAIDU_SEARCH_SOURCE": payload.baidu_search_source.strip(),
+        "RERANK_API_URL": payload.rerank_api_url.strip(),
+        "RERANK_MODEL": payload.rerank_model.strip(),
+        "AGENT_MAX_ITERATIONS": payload.agent_max_iterations,
+        "AGENT_TOOL_STATUS_ENABLED": payload.agent_tool_status_enabled,
+    }
+    if payload.model_api_key and payload.model_api_key.strip():
+        updates["MODEL_API_KEY"] = payload.model_api_key.strip()
+    if payload.baidu_search_api_key and payload.baidu_search_api_key.strip():
+        updates["BAIDU_SEARCH_API_KEY"] = payload.baidu_search_api_key.strip()
+
+    settings.model_base_url = str(updates["MODEL_BASE_URL"])
+    settings.model_default = str(updates["MODEL_DEFAULT"])
+    settings.model_vision_default = str(updates["MODEL_VISION_DEFAULT"])
+    settings.model_configs = str(updates["MODEL_CONFIGS"])
+    settings.model_enable_thinking = bool(updates["MODEL_ENABLE_THINKING"])
+    settings.web_search_enabled = bool(updates["WEB_SEARCH_ENABLED"])
+    settings.web_search_auto_mode = str(updates["WEB_SEARCH_AUTO_MODE"])
+    settings.web_search_top_k = int(updates["WEB_SEARCH_TOP_K"])
+    settings.web_search_fetch_top_k = int(updates["WEB_SEARCH_FETCH_TOP_K"])
+    settings.web_search_rerank_top_n = int(updates["WEB_SEARCH_RERANK_TOP_N"])
+    settings.web_search_query_planner_model = str(updates["WEB_SEARCH_QUERY_PLANNER_MODEL"])
+    settings.baidu_search_api_url = str(updates["BAIDU_SEARCH_API_URL"])
+    settings.baidu_search_source = str(updates["BAIDU_SEARCH_SOURCE"])
+    settings.rerank_api_url = str(updates["RERANK_API_URL"])
+    settings.rerank_model = str(updates["RERANK_MODEL"])
+    settings.agent_max_iterations = int(updates["AGENT_MAX_ITERATIONS"])
+    settings.agent_tool_status_enabled = bool(updates["AGENT_TOOL_STATUS_ENABLED"])
+    if "MODEL_API_KEY" in updates:
+        settings.model_api_key = str(updates["MODEL_API_KEY"])
+    if "BAIDU_SEARCH_API_KEY" in updates:
+        settings.baidu_search_api_key = str(updates["BAIDU_SEARCH_API_KEY"])
+
+    _write_env_values(updates)
+    return _app_config()
 
 
 def _track_tool_call(chunk: dict, tool_call_order: list[str], tool_calls: dict[str, ChatToolCall]) -> None:

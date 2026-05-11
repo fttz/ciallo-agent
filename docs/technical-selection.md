@@ -71,7 +71,7 @@
 | PDF | PyMuPDF |
 | DOCX | python-docx |
 | PPTX | python-pptx |
-| XLSX/CSV | openpyxl + pandas |
+| XLSX/CSV | openpyxl + Python csv |
 | TXT/MD | 原生读取 |
 | JSON | 原生 json |
 

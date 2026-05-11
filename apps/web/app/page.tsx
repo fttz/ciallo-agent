@@ -66,6 +66,33 @@ type StreamPayload = {
   output?: string;
 };
 
+type AppConfig = {
+  model_base_url: string;
+  model_default: string;
+  model_vision_default: string;
+  model_configs: string;
+  model_enable_thinking: boolean;
+  model_api_key_configured: boolean;
+  web_search_enabled: boolean;
+  web_search_auto_mode: "auto" | "required" | "disabled";
+  web_search_top_k: number;
+  web_search_fetch_top_k: number;
+  web_search_rerank_top_n: number;
+  web_search_query_planner_model: string;
+  baidu_search_api_url: string;
+  baidu_search_source: string;
+  baidu_search_api_key_configured: boolean;
+  rerank_api_url: string;
+  rerank_model: string;
+  agent_max_iterations: number;
+  agent_tool_status_enabled: boolean;
+};
+
+type AppConfigDraft = AppConfig & {
+  model_api_key: string;
+  baidu_search_api_key: string;
+};
+
 const API_BASE = "/backend";
 const MAX_IMAGE_DIMENSION = 1440;
 const IMAGE_REENCODE_THRESHOLD = 1.2 * 1024 * 1024;
@@ -79,6 +106,30 @@ const defaultModels: ModelInfo[] = [
   { id: "qwen-turbo-latest", name: "Qwen Turbo Latest", capabilities: ["text"] },
   { id: "qwen-vl-max-latest", name: "Qwen VL Max Latest", capabilities: ["text", "vision"] }
 ];
+
+const defaultAppConfig: AppConfigDraft = {
+  model_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  model_default: "qwen3.5-plus",
+  model_vision_default: "qwen3.5-plus",
+  model_configs: "qwen3.5-plus:Qwen3.5 Plus:text,vision",
+  model_enable_thinking: false,
+  model_api_key_configured: false,
+  model_api_key: "",
+  web_search_enabled: true,
+  web_search_auto_mode: "auto",
+  web_search_top_k: 10,
+  web_search_fetch_top_k: 6,
+  web_search_rerank_top_n: 4,
+  web_search_query_planner_model: "qwen3.5-plus",
+  baidu_search_api_url: "https://qianfan.baidubce.com/v2/ai_search/chat/completions",
+  baidu_search_source: "baidu_search_v2",
+  baidu_search_api_key_configured: false,
+  baidu_search_api_key: "",
+  rerank_api_url: "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
+  rerank_model: "gte-rerank-v2",
+  agent_max_iterations: 4,
+  agent_tool_status_enabled: true,
+};
 
 function renderToolCalls(message: ChatMessage, onToggleTool?: (toolId: string) => void) {
   if (!message.toolCalls?.length) return null;
@@ -181,6 +232,11 @@ export default function Page() {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeySaving, setApiKeySaving] = useState(false);
   const [apiKeyError, setApiKeyError] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [configDraft, setConfigDraft] = useState<AppConfigDraft>(defaultAppConfig);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configError, setConfigError] = useState("");
+  const [configSavedHint, setConfigSavedHint] = useState("");
   const initializedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -203,6 +259,7 @@ export default function Page() {
       try {
         await loadModels();
         await loadApiKeyStatus();
+        await loadAppConfig();
         await loadSessions();
       } finally {
         setBooting(false);
@@ -285,6 +342,68 @@ export default function Page() {
       setApiKeyModalOpen(!configured);
     } catch {
       // The chat request will surface backend availability errors if the API is unreachable.
+    }
+  }
+
+  async function loadAppConfig() {
+    try {
+      const res = await fetch(`${API_BASE}/api/app-config`);
+      if (!res.ok) return;
+      const data: AppConfig = await res.json();
+      setConfigDraft({
+        ...data,
+        model_api_key: "",
+        baidu_search_api_key: "",
+      });
+      setApiKeyConfigured(Boolean(data.model_api_key_configured));
+    } catch {
+      // Keep defaults if settings cannot be loaded; chat errors will still surface normally.
+    }
+  }
+
+  async function openSettings() {
+    setConfigError("");
+    setConfigSavedHint("");
+    await loadAppConfig();
+    setSettingsOpen(true);
+  }
+
+  function updateConfig<K extends keyof AppConfigDraft>(key: K, value: AppConfigDraft[K]) {
+    setConfigDraft((current) => ({ ...current, [key]: value }));
+    setConfigError("");
+    setConfigSavedHint("");
+  }
+
+  async function saveAppConfig(e: FormEvent) {
+    e.preventDefault();
+    setConfigSaving(true);
+    setConfigError("");
+    setConfigSavedHint("");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/app-config`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(configDraft),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(typeof detail.detail === "string" ? detail.detail : "config update failed");
+      }
+      const data: AppConfig = await res.json();
+      setConfigDraft({
+        ...data,
+        model_api_key: "",
+        baidu_search_api_key: "",
+      });
+      setApiKeyConfigured(Boolean(data.model_api_key_configured));
+      await loadModels();
+      setConfigSavedHint("设置已保存到 .env，并已应用到当前后端进程。");
+      setModelHint("配置已更新，新对话会使用最新模型与搜索设置。");
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : "保存失败，请稍后重试。");
+    } finally {
+      setConfigSaving(false);
     }
   }
 
@@ -923,7 +1042,7 @@ export default function Page() {
             <div>
               <div className="api-key-modal-title">需要配置 MODEL_API_KEY</div>
               <p className="api-key-modal-copy">
-                当前后端还没有可用的模型 API Key。填写后会写入当前运行中的后端进程，刷新页面不会丢失，重启服务后建议改用 .env 持久配置。
+                当前后端还没有可用的模型 API Key。填写后会保存到 .env，并立即应用到当前后端进程。
               </p>
             </div>
             <label className="api-key-field">
@@ -955,6 +1074,156 @@ export default function Page() {
                 {apiKeySaving ? "保存中..." : "保存并开始"}
               </button>
             </div>
+          </form>
+        </div>
+      ) : null}
+      {settingsOpen ? (
+        <div className="settings-modal-backdrop" role="presentation">
+          <form className="settings-modal" onSubmit={saveAppConfig}>
+            <header className="settings-modal-header">
+              <div>
+                <div className="settings-modal-title">设置</div>
+                <div className="settings-modal-subtitle">模型网关、搜索工具和 Agent 运行参数</div>
+              </div>
+              <button type="button" className="settings-close-button" onClick={() => setSettingsOpen(false)} aria-label="关闭设置">
+                x
+              </button>
+            </header>
+
+            <div className="settings-modal-body">
+              <section className="settings-section">
+                <div className="settings-section-title">模型</div>
+                <label className="settings-field settings-field-wide">
+                  <span>模型网关地址</span>
+                  <input value={configDraft.model_base_url} onChange={(e) => updateConfig("model_base_url", e.target.value)} />
+                </label>
+                <label className="settings-field">
+                  <span>MODEL_API_KEY</span>
+                  <input
+                    type="password"
+                    value={configDraft.model_api_key}
+                    onChange={(e) => updateConfig("model_api_key", e.target.value)}
+                    placeholder={configDraft.model_api_key_configured ? "已配置，留空不修改" : "未配置"}
+                    autoComplete="off"
+                  />
+                </label>
+                <label className="settings-field">
+                  <span>默认模型</span>
+                  <input value={configDraft.model_default} onChange={(e) => updateConfig("model_default", e.target.value)} />
+                </label>
+                <label className="settings-field">
+                  <span>视觉模型</span>
+                  <input value={configDraft.model_vision_default} onChange={(e) => updateConfig("model_vision_default", e.target.value)} />
+                </label>
+                <label className="settings-toggle">
+                  <input
+                    type="checkbox"
+                    checked={configDraft.model_enable_thinking}
+                    onChange={(e) => updateConfig("model_enable_thinking", e.target.checked)}
+                  />
+                  <span>默认开启思考模式</span>
+                </label>
+                <label className="settings-field settings-field-wide">
+                  <span>模型列表</span>
+                  <textarea
+                    value={configDraft.model_configs}
+                    onChange={(e) => updateConfig("model_configs", e.target.value)}
+                    rows={4}
+                    placeholder="model-id:模型名称:text,vision;another-id:Another:text"
+                  />
+                </label>
+              </section>
+
+              <section className="settings-section">
+                <div className="settings-section-title">联网搜索</div>
+                <label className="settings-toggle">
+                  <input
+                    type="checkbox"
+                    checked={configDraft.web_search_enabled}
+                    onChange={(e) => updateConfig("web_search_enabled", e.target.checked)}
+                  />
+                  <span>启用 web_search 工具</span>
+                </label>
+                <label className="settings-field">
+                  <span>搜索模式</span>
+                  <select value={configDraft.web_search_auto_mode} onChange={(e) => updateConfig("web_search_auto_mode", e.target.value as AppConfigDraft["web_search_auto_mode"])}>
+                    <option value="auto">自动判断</option>
+                    <option value="required">总是搜索</option>
+                    <option value="disabled">禁用搜索</option>
+                  </select>
+                </label>
+                <label className="settings-field">
+                  <span>BAIDU_SEARCH_API_KEY</span>
+                  <input
+                    type="password"
+                    value={configDraft.baidu_search_api_key}
+                    onChange={(e) => updateConfig("baidu_search_api_key", e.target.value)}
+                    placeholder={configDraft.baidu_search_api_key_configured ? "已配置，留空不修改" : "未配置"}
+                    autoComplete="off"
+                  />
+                </label>
+                <label className="settings-field settings-field-wide">
+                  <span>百度搜索 API 地址</span>
+                  <input value={configDraft.baidu_search_api_url} onChange={(e) => updateConfig("baidu_search_api_url", e.target.value)} />
+                </label>
+                <label className="settings-field">
+                  <span>搜索源</span>
+                  <input value={configDraft.baidu_search_source} onChange={(e) => updateConfig("baidu_search_source", e.target.value)} />
+                </label>
+                <label className="settings-field">
+                  <span>规划模型</span>
+                  <input value={configDraft.web_search_query_planner_model} onChange={(e) => updateConfig("web_search_query_planner_model", e.target.value)} />
+                </label>
+                <label className="settings-field">
+                  <span>搜索 Top K</span>
+                  <input type="number" min={1} value={configDraft.web_search_top_k} onChange={(e) => updateConfig("web_search_top_k", Number(e.target.value))} />
+                </label>
+                <label className="settings-field">
+                  <span>抓取 Top K</span>
+                  <input type="number" min={1} value={configDraft.web_search_fetch_top_k} onChange={(e) => updateConfig("web_search_fetch_top_k", Number(e.target.value))} />
+                </label>
+                <label className="settings-field">
+                  <span>重排 Top N</span>
+                  <input type="number" min={1} value={configDraft.web_search_rerank_top_n} onChange={(e) => updateConfig("web_search_rerank_top_n", Number(e.target.value))} />
+                </label>
+                <label className="settings-field settings-field-wide">
+                  <span>搜索结果重排 API 地址</span>
+                  <input value={configDraft.rerank_api_url} onChange={(e) => updateConfig("rerank_api_url", e.target.value)} />
+                </label>
+                <label className="settings-field">
+                  <span>搜索结果重排模型</span>
+                  <input value={configDraft.rerank_model} onChange={(e) => updateConfig("rerank_model", e.target.value)} />
+                </label>
+                <div className="settings-note settings-field-wide">当前没有使用 embedding 或向量检索；重排模型只用于联网搜索结果排序。</div>
+              </section>
+
+              <section className="settings-section">
+                <div className="settings-section-title">Agent</div>
+                <label className="settings-field">
+                  <span>最大工具轮次</span>
+                  <input type="number" min={1} value={configDraft.agent_max_iterations} onChange={(e) => updateConfig("agent_max_iterations", Number(e.target.value))} />
+                </label>
+                <label className="settings-toggle settings-field-wide">
+                  <input
+                    type="checkbox"
+                    checked={configDraft.agent_tool_status_enabled}
+                    onChange={(e) => updateConfig("agent_tool_status_enabled", e.target.checked)}
+                  />
+                  <span>展示工具调用状态与结果</span>
+                </label>
+              </section>
+            </div>
+
+            {configError ? <div className="settings-error">{configError}</div> : null}
+            {configSavedHint ? <div className="settings-success">{configSavedHint}</div> : null}
+            <footer className="settings-modal-footer">
+              <button type="button" className="settings-secondary-button" onClick={() => setSettingsOpen(false)}>
+                取消
+              </button>
+              <button type="submit" className="settings-primary-button" disabled={configSaving}>
+                {configSaving ? "保存中..." : "保存设置"}
+              </button>
+            </footer>
           </form>
         </div>
       ) : null}
@@ -1020,6 +1289,12 @@ export default function Page() {
               ))
             )}
           </section>
+          <footer className="history-footer">
+            <button type="button" className="settings-entry-button" onClick={openSettings}>
+              <span className="settings-entry-icon">S</span>
+              <span>设置</span>
+            </button>
+          </footer>
         </aside>
 
         <div className="chat-card">
@@ -1143,7 +1418,7 @@ export default function Page() {
                   ref={uploadInputRef}
                   type="file"
                   multiple
-                  accept="image/*,.heic,.heif,.txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.html,.htm,.url,.webloc,.web"
+                  accept="image/*,.heic,.heif,.txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.xlsx,.csv,.json,.html,.htm,.url,.webloc,.web"
                   hidden
                   onChange={async (e) => {
                     const input = e.currentTarget;
