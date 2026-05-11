@@ -108,9 +108,26 @@ npm run clean
 - 前端：http://localhost:3000
 - 后端健康检查：http://localhost:8000/api/health
 
+## 测试
+
+推荐在提交前运行完整测试：
+
+```bash
+npm test
+```
+
+也可以按模块单独运行：
+
+```bash
+npm run test:api
+npm run test:api:compile
+npm run test:web
+```
+
+当前后端测试覆盖文件解析、会话持久化、工具调用保存、聊天流式接口、后台生成完成保存、停止生成和设置写入 `.env`。`test:web` 当前使用 Next.js production build 作为前端类型与构建检查。
+
 ## 下一个里程碑建议
 
-1. 继续扩展聊天流式生成、文件解析、会话管理的端到端测试覆盖
-2. 增强设置页的密钥清除、配置导入导出与连接测试
-3. 为生成中会话增加更明确的列表状态提示
-4. 按需迁移会话存储到 SQLite 或 PostgreSQL
+1. 增强设置页的密钥清除、配置导入导出与连接测试
+2. 为生成中会话增加更明确的列表状态提示
+3. 按需迁移会话存储到 SQLite 或 PostgreSQL

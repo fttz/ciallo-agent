@@ -10,6 +10,10 @@
     "dev:web": "npm run dev --workspace @ciallo/web",
     "build:web": "npm run build --workspace @ciallo/web",
     "start:web": "npm run start --workspace @ciallo/web",
+    "test:api": "uv run pytest apps/api/tests",
+    "test:api:compile": "python3 -m compileall apps/api/app",
+    "test:web": "npm run build:web",
+    "test": "npm run test:api && npm run test:api:compile && npm run test:web",
     "clean": "bash scripts/cleanup.sh"
   }
 }
